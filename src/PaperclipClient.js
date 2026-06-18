@@ -139,6 +139,33 @@ class PaperclipClient {
   }
 
   /**
+   * Get all pending board approvals, ordered by creation date.
+   * Always returns an array regardless of API envelope format.
+   */
+  async getPendingApprovals() {
+    const data = await this._get(`/api/companies/${this.companyId}/approvals?status=pending`)
+    return Array.isArray(data) ? data : (data.approvals || data.items || data.data || [])
+  }
+
+  /**
+   * Approve a board approval.
+   * @param {string} id - Approval ID
+   * @param {string} decisionNote - Optional note from the approver
+   */
+  async approveApproval(id, decisionNote) {
+    return this._post(`/api/approvals/${id}/approve`, { decisionNote: decisionNote || '' })
+  }
+
+  /**
+   * Reject a board approval.
+   * @param {string} id - Approval ID
+   * @param {string} decisionNote - Optional note from the approver
+   */
+  async rejectApproval(id, decisionNote) {
+    return this._post(`/api/approvals/${id}/reject`, { decisionNote: decisionNote || '' })
+  }
+
+  /**
    * Mark a conversation task as done.
    */
   async closeTask(taskId) {

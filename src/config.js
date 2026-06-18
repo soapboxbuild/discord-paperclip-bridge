@@ -17,6 +17,15 @@ module.exports = {
     companyId: required('PAPERCLIP_COMPANY_ID'),
   },
 
+  // Approval bot for #board-approvals — handles approve/reject commands from Christopher.
+  // Set BOARD_DISCORD_TOKEN to enable. PAPERCLIP_BOARD_API_KEY should be a board-level
+  // API key from Hintsight (bank=soapbox, tagged 'credentials'); falls back to PAPERCLIP_API_KEY.
+  approvalBot: optional('BOARD_DISCORD_TOKEN') ? {
+    token: optional('BOARD_DISCORD_TOKEN'),
+    channelId: optional('BOARD_APPROVALS_CHANNEL_ID', '1516994726320930836'),
+    boardApiKey: optional('PAPERCLIP_BOARD_API_KEY') || required('PAPERCLIP_API_KEY'),
+  } : null,
+
   // One entry per bot. Add new bots here as tokens become available (SOA-156).
   // Filter out entries without tokens so the service starts with whatever is configured.
   bots: [
