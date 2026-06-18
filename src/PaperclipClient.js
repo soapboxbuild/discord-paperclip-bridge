@@ -78,6 +78,34 @@ class PaperclipClient {
   }
 
   /**
+   * Create a new conversation task for a Discord DM.
+   */
+  async createDMConversationTask({ agentId, userId, username, message }) {
+    const description = [
+      '## Discord Direct Message',
+      '',
+      `**From:** @${username} (${userId})`,
+      '',
+      '---',
+      '',
+      message,
+      '',
+      '---',
+      '',
+      '*This message came via Discord DM. Please reply conversationally by posting a comment on this task.*',
+      '*Your comment will be automatically sent back as a DM.*',
+      '*Keep responses concise — this is a live chat interface.*',
+    ].join('\n')
+
+    return this._post(`/api/companies/${this.companyId}/issues`, {
+      title: `[Discord DM] Chat with @${username}`,
+      description,
+      assigneeAgentId: agentId,
+      status: 'todo',
+    })
+  }
+
+  /**
    * Add a follow-up user message as a comment to an existing conversation task.
    */
   async addUserMessage(taskId, { username, message }) {

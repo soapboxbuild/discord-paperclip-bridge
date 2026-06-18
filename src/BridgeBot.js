@@ -1,18 +1,18 @@
-const { Client, GatewayIntentBits, Events } = require('discord.js')
+const { Client, GatewayIntentBits, Events, ChannelType, Partials } = require('discord.js')
 const ConversationManager = require('./ConversationManager')
 
 const DISCORD_MSG_LIMIT = 1900 // leave room for safety margin under 2000
 
 /**
  * One BridgeBot instance per Discord bot token.
- * Listens to a single dedicated channel and routes messages to a Paperclip agent.
+ * Listens to a dedicated guild channel and/or DMs, and routes messages to a Paperclip agent.
  */
 class BridgeBot {
   /**
    * @param {object} opts
    * @param {string} opts.name - Human name (e.g. "sophie")
    * @param {string} opts.token - Discord bot token
-   * @param {string} opts.channelId - Discord channel ID this bot listens to
+   * @param {string|null} opts.channelId - Discord channel ID this bot listens to (null = DM only)
    * @param {string} opts.agentId - Paperclip agent ID to route messages to
    * @param {string} opts.displayName - Display name for log messages
    * @param {import('./PaperclipClient')} opts.paperclip
@@ -35,7 +35,10 @@ class BridgeBot {
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
+        GatewayIntentBits.DirectMessages,
       ],
+      // Partials.Channel is required to receive MESSAGE_CREATE events in uncached DM channels
+      partials: [Partials.Channel],
     })
 
     this.client.once(Events.ClientReady, (c) => {
@@ -52,8 +55,10 @@ class BridgeBot {
   }
 
   async _onMessage(msg) {
-    // Only handle messages in the dedicated channel
-    if (msg.channelId !== this.channelId) return
+    const isDM = msg.guild === null
+
+    // For guild channels: only handle messages in the dedicated channel
+    if (!isDM && msg.channelId !== this.channelId) return
     // Ignore messages from bots (including ourselves)
     if (msg.author.bot) return
 
@@ -64,7 +69,7 @@ class BridgeBot {
 
     if (!userMessage) return
 
-    console.log(`[${this.name}] Received message from @${username}: ${userMessage.slice(0, 80)}...`)
+    console.log(`[${this.name}] Received ${isDM ? 'DM' : 'message'} from @${username}: ${userMessage.slice(0, 80)}...`)
 
     let conv = this.conversations.get(channelId, userId)
 
@@ -102,17 +107,27 @@ class BridgeBot {
       })
     } else {
       // Start a new conversation
-      const channel = await this.client.channels.fetch(channelId)
-      const channelName = channel.name || channelId
+      let task
+      if (isDM) {
+        task = await this.paperclip.createDMConversationTask({
+          agentId: this.agentId,
+          userId,
+          username,
+          message: userMessage,
+        })
+      } else {
+        const channel = await this.client.channels.fetch(channelId)
+        const channelName = channel.name || channelId
 
-      const task = await this.paperclip.createConversationTask({
-        agentId: this.agentId,
-        channelName,
-        guildId: channel.guildId,
-        userId,
-        username,
-        message: userMessage,
-      })
+        task = await this.paperclip.createConversationTask({
+          agentId: this.agentId,
+          channelName,
+          guildId: channel.guildId,
+          userId,
+          username,
+          message: userMessage,
+        })
+      }
       taskId = task.id
       this.conversations.set(channelId, userId, {
         taskId,

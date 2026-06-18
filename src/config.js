@@ -38,7 +38,8 @@ module.exports = {
     },
     // Future bots from SOA-156 — add env vars when tokens are provisioned:
     // { name: 'earl', token: optional('EARL_DISCORD_TOKEN'), channelId: optional('EARL_CHANNEL_ID'), agentId: optional('EARL_AGENT_ID'), displayName: 'Earl' },
-  ].filter(b => b.token && b.channelId),
+  // channelId is optional — a bot without one still receives and responds to DMs
+  ].filter(b => b.token),
 
   // Conversation management
   conversation: {

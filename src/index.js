@@ -22,7 +22,8 @@ async function main() {
   await Promise.all(bots.map(async bot => {
     try {
       await bot.start()
-      console.log(`[${bot.name}] Bot started, listening on channel ${bot.channelId}`)
+      const channelInfo = bot.channelId ? `, listening on channel ${bot.channelId}` : ', DM-only mode'
+      console.log(`[${bot.name}] Bot started${channelInfo}`)
     } catch (err) {
       console.error(`[${bot.name}] Failed to start:`, err.message)
       // Don't crash the whole process — other bots can still run
