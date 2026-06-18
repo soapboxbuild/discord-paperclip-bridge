@@ -3,15 +3,24 @@ const { Client, GatewayIntentBits, Events } = require('discord.js')
 /**
  * Handles approve/reject commands in #board-approvals.
  *
+ * Approve triggers (case-insensitive, matched at start of message):
+ *   yes, y, approve, approved, ok, sure, go ahead, looks good
+ *
+ * Reject triggers (case-insensitive, matched at start of message):
+ *   no, n, reject, rejected, nope, not yet, hold on
+ *
  * Commands supported:
- *   approve [note]           — approve single pending approval (optionally with note)
- *   reject [note]            — reject single pending approval
- *   approve 2 [- note]       — approve the 2nd pending approval by position
- *   reject 1 - note          — reject the 1st with decisionNote
+ *   yes [note]               — approve single pending approval (most recent)
+ *   no [note]                — reject single pending approval (most recent)
+ *   yes 2 [- note]           — approve the 2nd pending approval by position
+ *   no 1 - note              — reject the 1st with decisionNote
  *   approve <uuid> [- note]  — resolve by full approval ID
  *
  * When multiple approvals are pending and no position/ID is given, the bot
  * lists them numbered and waits for a targeted command.
+ *
+ * Bare yes/no resolves the MOST RECENTLY POSTED pending approval (index 0).
+ * Pending approvals are always sorted most-recent-first.
  */
 class ApprovalBot {
   /**
@@ -55,7 +64,13 @@ class ApprovalBot {
 
   async _refreshPendingApprovals() {
     try {
-      this.pendingApprovals = await this.paperclip.getPendingApprovals()
+      const approvals = await this.paperclip.getPendingApprovals()
+      // Sort most-recent-first so index 0 is always the latest approval
+      this.pendingApprovals = approvals.sort((a, b) => {
+        const aTime = new Date(a.createdAt).getTime()
+        const bTime = new Date(b.createdAt).getTime()
+        return bTime - aTime
+      })
       console.log(`[board-approvals] ${this.pendingApprovals.length} pending approval(s)`)
     } catch (err) {
       console.error(`[board-approvals] Failed to refresh pending approvals:`, err.message)
@@ -75,16 +90,31 @@ class ApprovalBot {
     const trimmed = text.trim()
     const lower = trimmed.toLowerCase()
 
+    // Multi-word triggers listed before single-word ones to prevent partial matches
+    const approveTriggers = ['go ahead', 'looks good', 'approved', 'approve', 'yes', 'y', 'ok', 'sure']
+    const rejectTriggers = ['not yet', 'hold on', 'rejected', 'reject', 'nope', 'no', 'n']
+
     let action, rest
-    if (lower.startsWith('approve')) {
-      action = 'approve'
-      rest = trimmed.slice(7).trim()
-    } else if (lower.startsWith('reject')) {
-      action = 'reject'
-      rest = trimmed.slice(6).trim()
-    } else {
-      return null
+
+    for (const trigger of approveTriggers) {
+      if (lower === trigger || lower.startsWith(trigger + ' ') || lower.startsWith(trigger + '-')) {
+        action = 'approve'
+        rest = trimmed.slice(trigger.length).trim()
+        break
+      }
     }
+
+    if (!action) {
+      for (const trigger of rejectTriggers) {
+        if (lower === trigger || lower.startsWith(trigger + ' ') || lower.startsWith(trigger + '-')) {
+          action = 'reject'
+          rest = trimmed.slice(trigger.length).trim()
+          break
+        }
+      }
+    }
+
+    if (!action) return null
 
     // Leading number: "2", "2 - note", "2 note"
     const numberPrefix = rest.match(/^(\d+)(?:\s*-\s*|\s+)(.+)$/)
@@ -102,7 +132,7 @@ class ApprovalBot {
       return { action, index: null, idOrNull: uuidPrefix[1], note: (uuidPrefix[2] || '').trim() }
     }
     // No number/UUID — rest is a plain note for a single-approval context
-    // Strip a leading "- " separator so "approve - looks good" → note "looks good"
+    // Strip a leading "- " separator so "yes - looks great" → note "looks great"
     const note = rest.startsWith('- ') ? rest.slice(2).trim() : rest
     return { action, index: null, idOrNull: null, note }
   }
@@ -146,9 +176,10 @@ class ApprovalBot {
         const list = this.pendingApprovals
           .map((a, i) => `**${i + 1}.** ${this._approvalTitle(a)}`)
           .join('\n')
+        const yesWord = action === 'approve' ? 'yes' : 'no'
         await msg.reply(
-          `There are **${this.pendingApprovals.length}** pending approvals:\n${list}\n\n` +
-          `Reply with \`${action} 1\` or \`${action} 2 - your note\` to target a specific one.`
+          `There are **${this.pendingApprovals.length}** pending approvals (newest first):\n${list}\n\n` +
+          `Reply with \`${yesWord} 1\` or \`${yesWord} 2 - your note\` to target a specific one.`
         )
         return
       }
