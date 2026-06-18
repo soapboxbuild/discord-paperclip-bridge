@@ -158,15 +158,23 @@ class ApprovalBot {
     const approval = this.pendingApprovals[targetIndex]
     const title = this._approvalTitle(approval)
 
+    // Immediate ack before resolving
+    const noteClause = note ? ` with note: "${note}"` : ''
+    const ackText = action === 'approve'
+      ? `✅ Got it — approved${noteClause}. Sophie is on it.`
+      : `❌ Got it — rejected${noteClause}. Sophie is on it.`
+    await msg.reply(ackText)
+
     try {
       if (action === 'approve') {
         await this.paperclip.approveApproval(approval.id, note)
-        await msg.reply(`✅ **Approved:** *${title}*${note ? ` — ${note}` : ''}`)
       } else {
         await this.paperclip.rejectApproval(approval.id, note)
-        await msg.reply(`❌ **Rejected:** *${title}*${note ? ` — ${note}` : ''}`)
       }
       this.pendingApprovals.splice(targetIndex, 1)
+      await this.paperclip.wakeupAgent('573ff2a4-0623-4fcd-ac8e-51d7b11d29c8').catch(err => {
+        console.error('[board-approvals] Failed to wake Sophie:', err.message)
+      })
     } catch (err) {
       console.error(`[board-approvals] Failed to ${action} approval ${approval.id}:`, err.message)
       await msg.reply(`⚠️ Failed to ${action}: ${err.message}`)

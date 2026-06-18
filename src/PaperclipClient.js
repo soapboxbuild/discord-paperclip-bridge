@@ -194,6 +194,13 @@ class PaperclipClient {
   }
 
   /**
+   * Wake a Paperclip agent by ID.
+   */
+  async wakeupAgent(agentId) {
+    return this._post(`/api/agents/${agentId}/wakeup`, {})
+  }
+
+  /**
    * Mark a conversation task as done.
    */
   async closeTask(taskId) {
