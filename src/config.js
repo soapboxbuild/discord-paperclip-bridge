@@ -28,11 +28,23 @@ module.exports = {
     channelRoutes: {
       [optional('SOPHIE_CHANNEL_ID') || '1516986529162072208']: {
         agentId: optional('SOPHIE_AGENT_ID') || '573ff2a4-0623-4fcd-ac8e-51d7b11d29c8',
+        token: optional('DISCORD_BOT_TOKEN_SOPHIE'),
         name: 'Sophie',
       },
       [optional('EARL_CHANNEL_ID') || '1516986742035447829']: {
         agentId: optional('EARL_AGENT_ID') || '97d41ad6-1ece-4870-92cb-0ae121c2eeb8',
+        token: optional('EARL_BOT_TOKEN'),
         name: 'Earl',
+      },
+      [optional('ANGIE_CHANNEL_ID') || '1517300227357409300']: {
+        agentId: optional('ANGIE_AGENT_ID') || '2d259ea5-9446-4c5e-911d-bbe03ec532db',
+        token: optional('ANGIE_BOT_TOKEN'),
+        name: 'Angie',
+      },
+      [optional('PARADH_CHANNEL_ID') || '1517300899389903089']: {
+        agentId: optional('PARADH_AGENT_ID') || 'defdd30b-a5cc-42db-82c2-0c39571e350a',
+        token: optional('PARADH_BOT_TOKEN'),
+        name: 'Paradh',
       },
     },
     boardApiKey: optional('PAPERCLIP_BOARD_API_KEY') || required('PAPERCLIP_API_KEY'),
