@@ -1,7 +1,14 @@
 const { Client, GatewayIntentBits, Events } = require('discord.js')
 
+// Multi-word triggers must come before their single-word prefixes to prevent partial matches
+const APPROVE_TRIGGERS = ['go ahead', 'looks good', 'approved', 'approve', 'yes', 'y', 'ok', 'sure']
+const REJECT_TRIGGERS = ['not yet', 'hold on', 'rejected', 'reject', 'nope', 'no', 'n']
+
+const POLL_INTERVAL_MS = 60_000
+
 /**
- * Handles approve/reject commands in #board-approvals.
+ * Handles approve/reject commands in #board-approvals and posts outbound notifications
+ * when new approvals appear.
  *
  * Approve triggers (case-insensitive, matched at start of message):
  *   yes, y, approve, approved, ok, sure, go ahead, looks good
@@ -10,17 +17,13 @@ const { Client, GatewayIntentBits, Events } = require('discord.js')
  *   no, n, reject, rejected, nope, not yet, hold on
  *
  * Commands supported:
- *   yes [note]               — approve single pending approval (most recent)
- *   no [note]                — reject single pending approval (most recent)
+ *   yes [note]               — approve most recently posted pending approval
+ *   no [note]                — reject most recently posted pending approval
  *   yes 2 [- note]           — approve the 2nd pending approval by position
  *   no 1 - note              — reject the 1st with decisionNote
  *   approve <uuid> [- note]  — resolve by full approval ID
  *
- * When multiple approvals are pending and no position/ID is given, the bot
- * lists them numbered and waits for a targeted command.
- *
- * Bare yes/no resolves the MOST RECENTLY POSTED pending approval (index 0).
- * Pending approvals are always sorted most-recent-first.
+ * Pending approvals are sorted most-recent-first; bare yes/no always resolves index 0.
  */
 class ApprovalBot {
   /**
@@ -33,8 +36,10 @@ class ApprovalBot {
     this.token = token
     this.channelId = channelId
     this.paperclip = paperclip
-    // In-memory ordered list, rebuilt on startup and refreshed before each command
+    // In-memory ordered list (newest-first), rebuilt on startup and refreshed before each command
     this.pendingApprovals = []
+    // Track which approval IDs have already been announced to avoid duplicate notifications
+    this.notifiedIds = new Set()
 
     this.client = new Client({
       intents: [
@@ -46,7 +51,10 @@ class ApprovalBot {
 
     this.client.once(Events.ClientReady, async (c) => {
       console.log(`[board-approvals] Logged in as ${c.user.tag}`)
-      await this._refreshPendingApprovals()
+      await this._checkForNewApprovals()
+      setInterval(() => this._checkForNewApprovals().catch(err => {
+        console.error('[board-approvals] Poll error:', err.message)
+      }), POLL_INTERVAL_MS)
     })
 
     this.client.on(Events.MessageCreate, (msg) => this._onMessage(msg).catch(err => {
@@ -60,6 +68,59 @@ class ApprovalBot {
 
   _approvalTitle(approval) {
     return approval.payload?.title || approval.payload?.name || approval.id
+  }
+
+  _approvalSummary(approval) {
+    return approval.payload?.summary || approval.payload?.description || approval.payload?.body || ''
+  }
+
+  _formatApprovalNotification(approval) {
+    const title = this._approvalTitle(approval)
+    const summary = this._approvalSummary(approval)
+    const lines = [`📋 Approval needed: ${title}`]
+    if (summary) lines.push(summary)
+    lines.push('', 'Reply yes or no.')
+    return lines.join('\n')
+  }
+
+  /**
+   * Poll for new pending approvals and post Discord notifications for ones not yet announced.
+   * Cleans up IDs that are no longer pending (already resolved).
+   */
+  async _checkForNewApprovals() {
+    await this._refreshPendingApprovals()
+
+    const currentIds = new Set(this.pendingApprovals.map(a => a.id))
+
+    // Prune IDs that are no longer pending
+    for (const id of this.notifiedIds) {
+      if (!currentIds.has(id)) this.notifiedIds.delete(id)
+    }
+
+    // Notify for newly appeared approvals, oldest-first within the batch
+    const newApprovals = this.pendingApprovals
+      .slice()
+      .reverse()
+      .filter(a => !this.notifiedIds.has(a.id))
+
+    if (newApprovals.length === 0) return
+
+    let channel
+    try {
+      channel = await this.client.channels.fetch(this.channelId)
+    } catch (err) {
+      console.error('[board-approvals] Cannot fetch channel for notifications:', err.message)
+      return
+    }
+
+    for (const approval of newApprovals) {
+      try {
+        await channel.send(this._formatApprovalNotification(approval))
+        this.notifiedIds.add(approval.id)
+      } catch (err) {
+        console.error(`[board-approvals] Failed to post notification for ${approval.id}:`, err.message)
+      }
+    }
   }
 
   async _refreshPendingApprovals() {
@@ -90,13 +151,9 @@ class ApprovalBot {
     const trimmed = text.trim()
     const lower = trimmed.toLowerCase()
 
-    // Multi-word triggers listed before single-word ones to prevent partial matches
-    const approveTriggers = ['go ahead', 'looks good', 'approved', 'approve', 'yes', 'y', 'ok', 'sure']
-    const rejectTriggers = ['not yet', 'hold on', 'rejected', 'reject', 'nope', 'no', 'n']
-
     let action, rest
 
-    for (const trigger of approveTriggers) {
+    for (const trigger of APPROVE_TRIGGERS) {
       if (lower === trigger || lower.startsWith(trigger + ' ') || lower.startsWith(trigger + '-')) {
         action = 'approve'
         rest = trimmed.slice(trigger.length).trim()
@@ -105,7 +162,7 @@ class ApprovalBot {
     }
 
     if (!action) {
-      for (const trigger of rejectTriggers) {
+      for (const trigger of REJECT_TRIGGERS) {
         if (lower === trigger || lower.startsWith(trigger + ' ') || lower.startsWith(trigger + '-')) {
           action = 'reject'
           rest = trimmed.slice(trigger.length).trim()
@@ -171,29 +228,18 @@ class ApprovalBot {
       }
       targetIndex = parsed.index
     } else {
-      // No target specified
-      if (this.pendingApprovals.length > 1) {
-        const list = this.pendingApprovals
-          .map((a, i) => `**${i + 1}.** ${this._approvalTitle(a)}`)
-          .join('\n')
-        const yesWord = action === 'approve' ? 'yes' : 'no'
-        await msg.reply(
-          `There are **${this.pendingApprovals.length}** pending approvals (newest first):\n${list}\n\n` +
-          `Reply with \`${yesWord} 1\` or \`${yesWord} 2 - your note\` to target a specific one.`
-        )
-        return
-      }
+      // No target specified — resolve most recent (index 0, newest-first order)
       targetIndex = 0
     }
 
     const approval = this.pendingApprovals[targetIndex]
     const title = this._approvalTitle(approval)
 
-    // Immediate ack before resolving
+    // Immediate ack before resolving, including the title so Christopher knows which one was hit
     const noteClause = note ? ` with note: "${note}"` : ''
     const ackText = action === 'approve'
-      ? `✅ Got it — approved${noteClause}. Sophie is on it.`
-      : `❌ Got it — rejected${noteClause}. Sophie is on it.`
+      ? `✅ Approved: **${title}**${noteClause}. Sophie is on it.`
+      : `❌ Rejected: **${title}**${noteClause}. Sophie is on it.`
     await msg.reply(ackText)
 
     try {
@@ -203,6 +249,7 @@ class ApprovalBot {
         await this.paperclip.rejectApproval(approval.id, note)
       }
       this.pendingApprovals.splice(targetIndex, 1)
+      this.notifiedIds.delete(approval.id)
       await this.paperclip.wakeupAgent('573ff2a4-0623-4fcd-ac8e-51d7b11d29c8').catch(err => {
         console.error('[board-approvals] Failed to wake Sophie:', err.message)
       })
