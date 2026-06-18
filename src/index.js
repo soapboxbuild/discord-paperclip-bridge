@@ -41,6 +41,26 @@ async function main() {
     }
   }
 
+  // ── Per-agent DM bots (SOA-156) ─────────────────────────────────────────
+  // Run alongside the gateway listener. Each agent's own bot routes DMs to that agent.
+  if (config.dmBots.length > 0) {
+    for (const botConfig of config.dmBots) {
+      const bot = new BridgeBot({
+        ...botConfig,
+        channelId: null,
+        paperclip,
+        conversationConfig: config.conversation,
+      })
+      try {
+        await bot.start()
+        console.log(`[${botConfig.name}] DM bot started`)
+      } catch (err) {
+        console.error(`[${botConfig.name}] Failed to start DM bot:`, err.message)
+      }
+    }
+    console.log(`[dm-bots] ${config.dmBots.length} per-agent DM bot(s) started`)
+  }
+
   // ── Legacy per-bot approach (used when DISCORD_BOT_TOKEN_SOPHIE is absent) ─
   if (!hasGateway) {
     const bots = config.bots.map(botConfig => new BridgeBot({
