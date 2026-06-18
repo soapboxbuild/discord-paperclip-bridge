@@ -102,7 +102,9 @@ class ApprovalBot {
       return { action, index: null, idOrNull: uuidPrefix[1], note: (uuidPrefix[2] || '').trim() }
     }
     // No number/UUID — rest is a plain note for a single-approval context
-    return { action, index: null, idOrNull: null, note: rest }
+    // Strip a leading "- " separator so "approve - looks good" → note "looks good"
+    const note = rest.startsWith('- ') ? rest.slice(2).trim() : rest
+    return { action, index: null, idOrNull: null, note }
   }
 
   async _onMessage(msg) {
