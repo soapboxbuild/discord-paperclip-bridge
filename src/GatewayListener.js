@@ -1,0 +1,379 @@
+const { Client, GatewayIntentBits, Events, ChannelType, Partials } = require('discord.js')
+const ConversationManager = require('./ConversationManager')
+
+const DISCORD_MSG_LIMIT = 1900
+const APPROVAL_POLL_INTERVAL_MS = 60_000
+
+// Multi-word triggers must come before their single-word prefixes to prevent partial matches
+const APPROVE_TRIGGERS = ['go ahead', 'looks good', 'approved', 'approve', 'yes', 'y', 'ok', 'sure']
+const REJECT_TRIGGERS = ['not yet', 'hold on', 'rejected', 'reject', 'nope', 'no', 'n']
+
+/**
+ * Single Discord Gateway WebSocket listener that routes messages to multiple Paperclip agents.
+ *
+ * Routing:
+ *  - DMs → dmAgentId (Sophie)
+ *  - Guild channel in channelRoutes → mapped agent
+ *  - boardApprovalsChannelId → inline approval resolution
+ *
+ * Uses one bot token (DISCORD_BOT_TOKEN_SOPHIE) for all channels.
+ * discord.js handles Gateway reconnection automatically.
+ */
+class GatewayListener {
+  /**
+   * @param {object} opts
+   * @param {string} opts.token - Discord bot token
+   * @param {Object.<string,{agentId:string,name:string}>} opts.channelRoutes - channelId → agent
+   * @param {string} opts.dmAgentId - Paperclip agent ID for DMs
+   * @param {string} opts.boardApprovalsChannelId - Discord channel ID for #board-approvals
+   * @param {import('./PaperclipClient')} opts.paperclip - For agent tasks/conversations
+   * @param {import('./PaperclipClient')} opts.approvalPaperclip - For approval resolution (board API key)
+   * @param {object} opts.conversationConfig - { expiryMinutes, pollIntervalSeconds, pollTimeoutSeconds }
+   */
+  constructor({ token, channelRoutes, dmAgentId, boardApprovalsChannelId, paperclip, approvalPaperclip, conversationConfig }) {
+    this.token = token
+    this.channelRoutes = channelRoutes
+    this.dmAgentId = dmAgentId
+    this.boardApprovalsChannelId = boardApprovalsChannelId
+    this.paperclip = paperclip
+    this.approvalPaperclip = approvalPaperclip
+    this.pollIntervalMs = conversationConfig.pollIntervalSeconds * 1000
+    this.pollTimeoutMs = conversationConfig.pollTimeoutSeconds * 1000
+
+    this.conversations = new ConversationManager({ expiryMinutes: conversationConfig.expiryMinutes })
+
+    this.pendingApprovals = []
+    this.notifiedIds = new Set()
+
+    this.client = new Client({
+      intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.DirectMessages,
+      ],
+      partials: [Partials.Channel],
+    })
+
+    this.client.once(Events.ClientReady, async (c) => {
+      console.log(`[gateway] Logged in as ${c.user.tag}`)
+      const routes = Object.entries(this.channelRoutes).map(([id, r]) => `#${r.name}(${id})`).join(', ')
+      console.log(`[gateway] Routing: DMs→${dmAgentId.slice(0, 8)}, channels: ${routes}, approvals: ${boardApprovalsChannelId}`)
+      await this._checkForNewApprovals()
+      setInterval(() => this._checkForNewApprovals().catch(err => {
+        console.error('[gateway] Approval poll error:', err.message)
+      }), APPROVAL_POLL_INTERVAL_MS)
+    })
+
+    this.client.on(Events.MessageCreate, (msg) => this._onMessage(msg).catch(err => {
+      console.error('[gateway] Error handling message:', err)
+    }))
+  }
+
+  async start() {
+    await this.client.login(this.token)
+  }
+
+  async _onMessage(msg) {
+    if (msg.author.bot) return
+
+    const isDM = msg.channel.type === ChannelType.DM || !msg.guild
+
+    if (isDM) {
+      return this._handleAgentMessage(msg, this.dmAgentId, 'Sophie', true)
+    }
+
+    if (msg.channelId === this.boardApprovalsChannelId) {
+      return this._handleApproval(msg)
+    }
+
+    const route = this.channelRoutes[msg.channelId]
+    if (route) {
+      return this._handleAgentMessage(msg, route.agentId, route.name, false)
+    }
+    // Ignore messages in channels not in the routing table
+  }
+
+  // ── Agent message handling ────────────────────────────────────────────────
+
+  async _handleAgentMessage(msg, agentId, agentName, isDM) {
+    const channelId = msg.channelId
+    const userId = msg.author.id
+    const username = msg.author.username
+    const userMessage = msg.content.trim()
+
+    if (!userMessage) return
+
+    console.log(`[gateway:${agentName}] Received ${isDM ? 'DM' : 'message'} from @${username}: ${userMessage.slice(0, 80)}`)
+
+    let conv = this.conversations.get(channelId, userId)
+
+    if (conv && conv.awaitingResponse) {
+      console.log(`[gateway:${agentName}] Agent busy; queuing message for task ${conv.taskId}`)
+      await this.paperclip.addUserMessage(conv.taskId, { username, message: userMessage })
+      this.conversations.update(channelId, userId, {})
+      if (conv.thinkingMessageId) {
+        try {
+          const channel = await this.client.channels.fetch(channelId)
+          const thinkingMsg = await channel.messages.fetch(conv.thinkingMessageId)
+          await thinkingMsg.edit('🤔 Working on it... *(new messages queued)*')
+        } catch (_) {}
+      }
+      return
+    }
+
+    const thinkingMsg = await msg.reply('🤔 Working on it...')
+    let taskId
+    let lastCommentId = null
+
+    if (conv) {
+      taskId = conv.taskId
+      lastCommentId = conv.lastCommentId
+      const comment = await this.paperclip.addUserMessage(taskId, { username, message: userMessage })
+      lastCommentId = comment.id
+      this.conversations.update(channelId, userId, {
+        awaitingResponse: true,
+        thinkingMessageId: thinkingMsg.id,
+        lastCommentId,
+      })
+    } else {
+      let task
+      if (isDM) {
+        task = await this.paperclip.createDMConversationTask({ agentId, userId, username, message: userMessage })
+      } else {
+        const channel = await this.client.channels.fetch(channelId)
+        task = await this.paperclip.createConversationTask({
+          agentId,
+          channelName: channel.name || channelId,
+          guildId: channel.guildId,
+          userId,
+          username,
+          message: userMessage,
+        })
+      }
+      taskId = task.id
+      this.conversations.set(channelId, userId, {
+        taskId,
+        lastCommentId: null,
+        awaitingResponse: true,
+        thinkingMessageId: thinkingMsg.id,
+      })
+      console.log(`[gateway:${agentName}] Created task ${task.identifier} for @${username}`)
+    }
+
+    this._waitForResponse(channelId, userId, agentId, agentName, taskId, lastCommentId, thinkingMsg)
+  }
+
+  async _waitForResponse(channelId, userId, agentId, agentName, taskId, lastCommentId, thinkingMsg) {
+    const result = await this.paperclip.pollForResponse(
+      taskId,
+      agentId,
+      lastCommentId,
+      this.pollTimeoutMs,
+      this.pollIntervalMs,
+    )
+
+    const conv = this.conversations.get(channelId, userId)
+
+    if (!result) {
+      console.warn(`[gateway:${agentName}] Timeout waiting for response on task ${taskId}`)
+      await this._editOrReply(thinkingMsg, `⏱️ No response from ${agentName} yet — they may be busy. Try again in a moment.`)
+      if (conv) this.conversations.update(channelId, userId, { awaitingResponse: false })
+      return
+    }
+
+    const chunks = this._formatResponse(result.body)
+    for (let i = 0; i < chunks.length; i++) {
+      if (i === 0) {
+        await this._editOrReply(thinkingMsg, chunks[i])
+      } else {
+        try {
+          await thinkingMsg.channel.send(chunks[i])
+        } catch (err) {
+          console.error(`[gateway:${agentName}] Failed to send response chunk:`, err.message)
+        }
+      }
+    }
+
+    if (conv) {
+      this.conversations.update(channelId, userId, {
+        awaitingResponse: false,
+        lastCommentId: result.lastCommentId,
+        thinkingMessageId: null,
+      })
+    }
+  }
+
+  async _editOrReply(msg, content) {
+    try {
+      await msg.edit(content)
+    } catch (_) {
+      try {
+        await msg.channel.send(content)
+      } catch (err) {
+        console.error('[gateway] Could not send response:', err.message)
+      }
+    }
+  }
+
+  _formatResponse(text) {
+    if (text.length <= DISCORD_MSG_LIMIT) return [text]
+    const chunks = []
+    let remaining = text
+    while (remaining.length > DISCORD_MSG_LIMIT) {
+      const boundary = remaining.lastIndexOf('\n\n', DISCORD_MSG_LIMIT)
+      const cutAt = boundary > 100 ? boundary : DISCORD_MSG_LIMIT
+      chunks.push(remaining.slice(0, cutAt).trim())
+      remaining = remaining.slice(cutAt).trim()
+    }
+    if (remaining) chunks.push(remaining)
+    return chunks
+  }
+
+  // ── Approval handling ─────────────────────────────────────────────────────
+
+  /**
+   * Parse approve/reject commands from #board-approvals.
+   * Returns null if the message is not a command.
+   */
+  _parseApprovalCommand(text) {
+    const trimmed = text.trim()
+    const lower = trimmed.toLowerCase()
+    let action, rest
+
+    for (const trigger of APPROVE_TRIGGERS) {
+      if (lower === trigger || lower.startsWith(trigger + ' ') || lower.startsWith(trigger + '-')) {
+        action = 'approve'
+        rest = trimmed.slice(trigger.length).trim()
+        break
+      }
+    }
+    if (!action) {
+      for (const trigger of REJECT_TRIGGERS) {
+        if (lower === trigger || lower.startsWith(trigger + ' ') || lower.startsWith(trigger + '-')) {
+          action = 'reject'
+          rest = trimmed.slice(trigger.length).trim()
+          break
+        }
+      }
+    }
+    if (!action) return null
+
+    const numberPrefix = rest.match(/^(\d+)(?:\s*-\s*|\s+)(.+)$/)
+    const bareNumber = rest.match(/^(\d+)$/)
+    const uuidPrefix = rest.match(/^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\s*-\s*|\s+)?(.*)$/i)
+
+    if (numberPrefix) return { action, index: parseInt(numberPrefix[1], 10) - 1, idOrNull: null, note: numberPrefix[2].trim() }
+    if (bareNumber) return { action, index: parseInt(bareNumber[1], 10) - 1, idOrNull: null, note: '' }
+    if (uuidPrefix) return { action, index: null, idOrNull: uuidPrefix[1], note: (uuidPrefix[2] || '').trim() }
+    const note = rest.startsWith('- ') ? rest.slice(2).trim() : rest
+    return { action, index: null, idOrNull: null, note }
+  }
+
+  _approvalTitle(a) {
+    return a.payload?.title || a.payload?.name || a.id
+  }
+
+  async _handleApproval(msg) {
+    const parsed = this._parseApprovalCommand(msg.content)
+    if (!parsed) return
+
+    await this._refreshPendingApprovals()
+
+    if (this.pendingApprovals.length === 0) {
+      await msg.reply('There are no pending board approvals right now.')
+      return
+    }
+
+    const { action, note } = parsed
+    let targetIndex
+
+    if (parsed.idOrNull) {
+      const idx = this.pendingApprovals.findIndex(a => a.id === parsed.idOrNull)
+      if (idx === -1) {
+        await msg.reply(`❓ No pending approval found with ID \`${parsed.idOrNull}\`.`)
+        return
+      }
+      targetIndex = idx
+    } else if (parsed.index !== null) {
+      if (parsed.index < 0 || parsed.index >= this.pendingApprovals.length) {
+        await msg.reply(`❓ No approval #${parsed.index + 1}. There are ${this.pendingApprovals.length} pending.`)
+        return
+      }
+      targetIndex = parsed.index
+    } else {
+      targetIndex = 0
+    }
+
+    const approval = this.pendingApprovals[targetIndex]
+    const title = this._approvalTitle(approval)
+    const noteClause = note ? ` with note: "${note}"` : ''
+    const ackText = action === 'approve'
+      ? `✅ Approved: **${title}**${noteClause}. Sophie is on it.`
+      : `❌ Rejected: **${title}**${noteClause}. Sophie is on it.`
+    await msg.reply(ackText)
+
+    try {
+      if (action === 'approve') {
+        await this.approvalPaperclip.approveApproval(approval.id, note)
+      } else {
+        await this.approvalPaperclip.rejectApproval(approval.id, note)
+      }
+      this.pendingApprovals.splice(targetIndex, 1)
+      this.notifiedIds.delete(approval.id)
+      await this.approvalPaperclip.wakeupAgent(this.dmAgentId).catch(err => {
+        console.error('[gateway] Failed to wake Sophie after approval:', err.message)
+      })
+    } catch (err) {
+      console.error(`[gateway] Failed to ${action} approval ${approval.id}:`, err.message)
+      await msg.reply(`⚠️ Failed to ${action}: ${err.message}`)
+    }
+  }
+
+  async _refreshPendingApprovals() {
+    try {
+      const approvals = await this.approvalPaperclip.getPendingApprovals()
+      this.pendingApprovals = approvals.sort((a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      )
+      console.log(`[gateway] ${this.pendingApprovals.length} pending approval(s)`)
+    } catch (err) {
+      console.error('[gateway] Failed to refresh pending approvals:', err.message)
+    }
+  }
+
+  async _checkForNewApprovals() {
+    await this._refreshPendingApprovals()
+
+    const currentIds = new Set(this.pendingApprovals.map(a => a.id))
+    for (const id of this.notifiedIds) {
+      if (!currentIds.has(id)) this.notifiedIds.delete(id)
+    }
+
+    const newApprovals = this.pendingApprovals.slice().reverse().filter(a => !this.notifiedIds.has(a.id))
+    if (newApprovals.length === 0) return
+
+    let channel
+    try {
+      channel = await this.client.channels.fetch(this.boardApprovalsChannelId)
+    } catch (err) {
+      console.error('[gateway] Cannot fetch #board-approvals for notifications:', err.message)
+      return
+    }
+
+    for (const approval of newApprovals) {
+      try {
+        const summary = approval.payload?.summary || approval.payload?.description || ''
+        const lines = [`📋 Approval needed: ${this._approvalTitle(approval)}`]
+        if (summary) lines.push(summary)
+        lines.push('', 'Reply yes or no.')
+        await channel.send(lines.join('\n'))
+        this.notifiedIds.add(approval.id)
+      } catch (err) {
+        console.error(`[gateway] Failed to post approval notification for ${approval.id}:`, err.message)
+      }
+    }
+  }
+}
+
+module.exports = GatewayListener

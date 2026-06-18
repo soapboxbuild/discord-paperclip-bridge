@@ -17,17 +17,37 @@ module.exports = {
     companyId: required('PAPERCLIP_COMPANY_ID'),
   },
 
+  // ── Gateway listener (SOA-306) ──────────────────────────────────────────────
+  // Single Discord client using DISCORD_BOT_TOKEN_SOPHIE. Routes DMs to Sophie,
+  // #sophie and #earl-assistant to their respective agents, and #board-approvals
+  // to the inline approval handler. Preferred over the legacy per-bot approach.
+  gatewayListener: optional('DISCORD_BOT_TOKEN_SOPHIE') ? {
+    token: optional('DISCORD_BOT_TOKEN_SOPHIE'),
+    dmAgentId: optional('SOPHIE_AGENT_ID', '573ff2a4-0623-4fcd-ac8e-51d7b11d29c8'),
+    boardApprovalsChannelId: optional('BOARD_APPROVALS_CHANNEL_ID', '1516994726320930836'),
+    channelRoutes: {
+      [optional('SOPHIE_CHANNEL_ID') || '1516986529162072208']: {
+        agentId: optional('SOPHIE_AGENT_ID') || '573ff2a4-0623-4fcd-ac8e-51d7b11d29c8',
+        name: 'Sophie',
+      },
+      [optional('EARL_CHANNEL_ID') || '1516986742035447829']: {
+        agentId: optional('EARL_AGENT_ID') || '97d41ad6-1ece-4870-92cb-0ae121c2eeb8',
+        name: 'Earl',
+      },
+    },
+    boardApiKey: optional('PAPERCLIP_BOARD_API_KEY') || required('PAPERCLIP_API_KEY'),
+  } : null,
+
+  // ── Legacy per-bot approach (kept for backward compatibility) ────────────
+  // Used when DISCORD_BOT_TOKEN_SOPHIE is absent but SOPHIE_DISCORD_TOKEN is set.
   // Approval bot for #board-approvals — handles approve/reject commands from Christopher.
-  // Set BOARD_DISCORD_TOKEN to enable. PAPERCLIP_BOARD_API_KEY should be a board-level
-  // API key from Hintsight (bank=soapbox, tagged 'credentials'); falls back to PAPERCLIP_API_KEY.
   approvalBot: optional('BOARD_DISCORD_TOKEN') ? {
     token: optional('BOARD_DISCORD_TOKEN'),
     channelId: optional('BOARD_APPROVALS_CHANNEL_ID', '1516994726320930836'),
     boardApiKey: optional('PAPERCLIP_BOARD_API_KEY') || required('PAPERCLIP_API_KEY'),
   } : null,
 
-  // One entry per bot. Add new bots here as tokens become available (SOA-156).
-  // Filter out entries without tokens so the service starts with whatever is configured.
+  // One entry per legacy bot. Only used when gatewayListener is not configured.
   bots: [
     {
       name: 'sophie',
@@ -36,9 +56,6 @@ module.exports = {
       agentId: optional('SOPHIE_AGENT_ID', '573ff2a4-0623-4fcd-ac8e-51d7b11d29c8'),
       displayName: 'Sophie',
     },
-    // Future bots from SOA-156 — add env vars when tokens are provisioned:
-    // { name: 'earl', token: optional('EARL_DISCORD_TOKEN'), channelId: optional('EARL_CHANNEL_ID'), agentId: optional('EARL_AGENT_ID'), displayName: 'Earl' },
-  // channelId is optional — a bot without one still receives and responds to DMs
   ].filter(b => b.token),
 
   // Conversation management
