@@ -34,10 +34,6 @@ async function main() {
       ...config.paperclip,
       apiKey: config.gatewayListener.boardApiKey,
     })
-    const haikuResponder = config.haiku.enabled
-      ? new HaikuResponder({ anthropicApiKey: config.haiku.anthropicApiKey, hindsightApiKey: config.haiku.hindsightApiKey })
-      : null
-    if (haikuResponder) console.log('[haiku] Haiku tier enabled')
     const listener = new GatewayListener({
       token: config.gatewayListener.token,
       channelRoutes: config.gatewayListener.channelRoutes,
