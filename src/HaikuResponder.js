@@ -1,9 +1,15 @@
 const Anthropic = require('@anthropic-ai/sdk')
-const fs = require('fs')
-const path = require('path')
 
-const AGENTS_BASE = '/paperclip/instances/default/companies/bca4541f-fc58-48ce-84f0-7fa71df7c67c/agents'
+const PAPERCLIP_API_URL = 'https://org.soapbox.build'
 const HINDSIGHT_URL = 'https://agent-memory.soapbox.build/mcp'
+const INSTRUCTIONS_CACHE_TTL_MS = 60_000
+const MAX_SYSTEM_PROMPT_CHARS = 12_000 // ~3000 tokens
+
+// Ordered priority files; remaining .md files follow alphabetically
+const PRIORITY_FILES = ['IDENTITY.md', 'AGENTS.md', 'PERMISSIONS.md', 'TOOLS.md']
+
+// { agentId -> { content: string, expiresAt: number } }
+const instructionsCache = new Map()
 
 async function hindsightCall(method, args, apiKey) {
   if (!apiKey) return null
@@ -33,31 +39,49 @@ function extractText(data, maxLen) {
   return content.filter(c => c.type === 'text').map(c => c.text || '').join('\n').slice(0, maxLen)
 }
 
-function loadAgentSystemPrompt(agentId, agentName) {
-  const dir = path.join(AGENTS_BASE, agentId, 'instructions')
-
-  let identity = ''
-  try {
-    identity = fs.readFileSync(path.join(dir, 'IDENTITY.md'), 'utf8')
-  } catch {
-    // IDENTITY.md not present — proceed without it
+async function loadAgentSystemPrompt(agentId, agentName, paperclipApiKey) {
+  const now = Date.now()
+  const cached = instructionsCache.get(agentId)
+  if (cached && now < cached.expiresAt) {
+    return cached.content
   }
 
-  let agents = ''
+  let content
   try {
-    agents = fs.readFileSync(path.join(dir, 'AGENTS.md'), 'utf8').slice(0, 1000)
-  } catch {
-    // AGENTS.md not present
+    const res = await fetch(`${PAPERCLIP_API_URL}/api/agents/${agentId}/instructions-bundle`, {
+      headers: { 'Authorization': `Bearer ${paperclipApiKey}` },
+      signal: AbortSignal.timeout(8000),
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const bundle = await res.json()
+
+    const mdFiles = (bundle.files || []).filter(f => f.path && f.path.endsWith('.md'))
+    const fileMap = new Map(mdFiles.map(f => [f.path.replace(/^.*\//, ''), f.content || '']))
+
+    const ordered = []
+    for (const name of PRIORITY_FILES) {
+      if (fileMap.has(name)) { ordered.push(fileMap.get(name)); fileMap.delete(name) }
+    }
+    for (const [, fc] of [...fileMap.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+      ordered.push(fc)
+    }
+
+    const joined = ordered.filter(Boolean).join('\n\n')
+    content = joined.slice(0, MAX_SYSTEM_PROMPT_CHARS) || `You are ${agentName}, an AI agent at Soapbox.`
+  } catch (err) {
+    console.warn(`[HaikuResponder] Could not load instructions for ${agentId}: ${err.message}`)
+    content = instructionsCache.get(agentId)?.content || `You are ${agentName}, an AI agent at Soapbox.`
   }
 
-  const combined = (identity + (agents ? '\n\n' + agents : '')).slice(0, 2000)
-  return combined || `You are ${agentName}, an AI agent at Soapbox.`
+  instructionsCache.set(agentId, { content, expiresAt: now + INSTRUCTIONS_CACHE_TTL_MS })
+  return content
 }
 
 class HaikuResponder {
-  constructor({ anthropicApiKey, hindsightApiKey }) {
+  constructor({ anthropicApiKey, hindsightApiKey, paperclipApiKey = null }) {
     this.client = new Anthropic({ apiKey: anthropicApiKey })
     this.hindsightApiKey = hindsightApiKey
+    this.paperclipApiKey = paperclipApiKey
   }
 
   /**
@@ -118,7 +142,7 @@ class HaikuResponder {
    */
   async respond({ agentId, agentName, userMessage, channelId = null, window = [], hindsightSummary = '' }) {
     const [systemBase, hindsightCtx] = await Promise.all([
-      Promise.resolve(loadAgentSystemPrompt(agentId, agentName)),
+      loadAgentSystemPrompt(agentId, agentName, this.paperclipApiKey),
       hindsightCall('recall', { query: userMessage }, this.hindsightApiKey).then(d => d ? extractText(d, 1200) : ''),
     ])
 

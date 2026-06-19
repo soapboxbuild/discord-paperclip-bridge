@@ -22,6 +22,7 @@ async function main() {
     ? new HaikuResponder({
         anthropicApiKey: config.haiku.anthropicApiKey,
         hindsightApiKey: config.haiku.hindsightApiKey,
+        paperclipApiKey: config.gatewayListener?.boardApiKey ?? config.paperclip.apiKey,
       })
     : null
   if (haikuResponder) {
