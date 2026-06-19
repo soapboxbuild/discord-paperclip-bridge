@@ -128,7 +128,7 @@ module.exports = {
         token: optional('DESI_BOT_TOKEN'),
         name: 'Desi',
       },
-      [optional('SOPHIE_CHANNEL_ID' || '1516986529162072208']: {
+      [optional('SOPHIE_CHANNEL_ID') || '1516986529162072208']: {
         agentId: optional('SOPHIE_AGENT_ID') || '573ff2a4-0623-4fcd-ac8e-51d7b11d29c8',
         token: optional('DISCORD_BOT_TOKEN_SOPHIE'),
         name: 'Sophie',
