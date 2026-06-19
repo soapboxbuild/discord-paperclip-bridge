@@ -41,6 +41,19 @@ class GatewayListener {
   }
 
   /**
+   * Show the typing indicator as a specific bot identity (e.g. Earl), so the
+   * "<agent> is typing…" matches who actually replies. Uses the agent token via
+   * REST rather than the gateway client (which would show as Sophie).
+   */
+  async _typingAs(channelId, botToken) {
+    const token = botToken || this.token
+    await fetch(`https://discord.com/api/v10/channels/${channelId}/typing`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bot ${token}` },
+    }).catch(() => {})
+  }
+
+  /**
    * @param {object} opts
    * @param {string} opts.token - Discord bot token
    * @param {Object.<string,{agentId:string,name:string}>} opts.channelRoutes - channelId → agent
@@ -153,7 +166,7 @@ class GatewayListener {
 
     // ── Tier 1 / Tier 2: Haiku fast response ──────────────────────────────
     if (this.haikuResponder) {
-      msg.channel.sendTyping().catch(() => {})
+      this._typingAs(channelId, botToken)
 
       // Fetch conversation window + Hindsight summary before calling Haiku.
       // Also pull recent channel history so the agent can see its own prior

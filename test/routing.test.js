@@ -29,12 +29,14 @@ function makeListener({ haikuResult }) {
     haikuResponder,
   })
 
-  // Record every outbound send instead of hitting Discord.
+  // Record every outbound send / typing instead of hitting Discord.
   const sends = []
   listener._sendAs = async (channelId, content, replyToMsgId, botToken) => {
     sends.push({ channelId, content, replyToMsgId, botToken })
   }
-  return { listener, sends, haikuCalls }
+  const typing = []
+  listener._typingAs = async (channelId, botToken) => { typing.push({ channelId, botToken }) }
+  return { listener, sends, haikuCalls, typing }
 }
 
 // Fake the recent channel history that messages.fetch() would return,
@@ -64,13 +66,14 @@ function makeMsg(channelId, content) {
 }
 
 test('routed customer channel replies with the routed agent\'s token (Earl, not Sophie)', async () => {
-  const { listener, sends } = makeListener({ haikuResult: { needsWork: false, reply: 'On it — moving the deck to tomorrow.' } })
+  const { listener, sends, typing } = makeListener({ haikuResult: { needsWork: false, reply: 'On it — moving the deck to tomorrow.' } })
   await listener._onMessage(makeMsg(JPMAM_CHANNEL, 'Move to tomorrow'))
 
   assert.equal(sends.length, 1, 'exactly one reply sent')
   assert.equal(sends[0].botToken, EARL_TOKEN, 'reply must use Earl\'s bot token, not the gateway/Sophie token')
   assert.equal(sends[0].channelId, JPMAM_CHANNEL)
   assert.equal(sends[0].replyToMsgId, 'trigger-msg', 'first chunk is a reply to the triggering message')
+  assert.equal(typing[0]?.botToken, EARL_TOKEN, 'typing indicator must show as Earl, not Sophie')
 })
 
 test('Haiku receives recent channel history including the agent\'s own check-in', async () => {
