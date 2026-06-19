@@ -34,13 +34,27 @@ function extractText(data, maxLen) {
 }
 
 function loadAgentSystemPrompt(agentId, agentName) {
+  const base = path.join(AGENTS_BASE, agentId, 'instructions')
+
+  let identityContent = ''
   try {
-    const p = path.join(AGENTS_BASE, agentId, 'instructions', 'AGENTS.md')
-    const content = fs.readFileSync(p, 'utf8')
-    return content.slice(0, 500)
+    identityContent = fs.readFileSync(path.join(base, 'IDENTITY.md'), 'utf8')
   } catch {
+    // no IDENTITY.md — degrade gracefully
+  }
+
+  let agentsContent = ''
+  try {
+    agentsContent = fs.readFileSync(path.join(base, 'AGENTS.md'), 'utf8').slice(0, 1000)
+  } catch {
+    // no AGENTS.md
+  }
+
+  if (!identityContent && !agentsContent) {
     return `You are ${agentName}, an AI agent at Soapbox.`
   }
+
+  return (identityContent + agentsContent).slice(0, 2000)
 }
 
 class HaikuResponder {
