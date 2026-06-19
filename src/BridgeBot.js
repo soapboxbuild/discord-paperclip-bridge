@@ -80,7 +80,7 @@ class BridgeBot {
       const window = this.conversations.getWindow(channelId)
       let hindsightSummary = this.conversations.getCachedSummary(channelId)
       if (hindsightSummary === null) {
-        hindsightSummary = await this.haikuResponder.recallConversationSummary(channelId)
+        hindsightSummary = await this.haikuResponder.recallConversationSummary(channelId, this.agentId)
         this.conversations.setCachedSummary(channelId, hindsightSummary)
       }
 
@@ -284,7 +284,7 @@ class BridgeBot {
     const dropped = this.conversations.addToWindow(channelId, userMsg, agentReply)
     if (dropped) {
       const existing = this.conversations.getCachedSummary(channelId) || ''
-      this.haikuResponder.appendToSummary(channelId, dropped, existing)
+      this.haikuResponder.appendToSummary(channelId, dropped, existing, this.agentId)
         .then(newSummary => this.conversations.setCachedSummary(channelId, newSummary))
         .catch(err => console.error(`[${this.name}] Failed to store conversation summary:`, err.message))
     }

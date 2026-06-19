@@ -115,7 +115,7 @@ class GatewayListener {
       const window = this.conversations.getWindow(channelId)
       let hindsightSummary = this.conversations.getCachedSummary(channelId)
       if (hindsightSummary === null) {
-        hindsightSummary = await this.haikuResponder.recallConversationSummary(channelId)
+        hindsightSummary = await this.haikuResponder.recallConversationSummary(channelId, agentId)
         this.conversations.setCachedSummary(channelId, hindsightSummary)
       }
 
@@ -143,7 +143,7 @@ class GatewayListener {
             await msg.channel.send(chunks[i])
           }
         }
-        this._updateWindow(channelId, userMessage, haikuResult.reply)
+        this._updateWindow(channelId, userMessage, haikuResult.reply, agentId)
         return
       }
 
@@ -171,7 +171,7 @@ class GatewayListener {
             ? `${haikuResult.reply}\n\nOn it — I've kicked off: ${workDesc}. I'll update you when done. (${task.identifier})`
             : `On it — I've kicked off: ${workDesc}. I'll update you when done. (${task.identifier})`
           await msg.reply(confirmText.slice(0, 1900))
-          this._updateWindow(channelId, userMessage, confirmText)
+          this._updateWindow(channelId, userMessage, confirmText, agentId)
         } catch (err) {
           console.error(`[gateway:${agentName}] Failed to create work task:`, err.message)
           await msg.reply(`⚠️ Could not queue work: ${err.message}`)
@@ -284,11 +284,11 @@ class GatewayListener {
    * Add a Haiku exchange to the sliding window and fire-and-forget Hindsight summarisation
    * when a pair is dropped from the window.
    */
-  _updateWindow(channelId, userMsg, agentReply) {
+  _updateWindow(channelId, userMsg, agentReply, agentId = null) {
     const dropped = this.conversations.addToWindow(channelId, userMsg, agentReply)
     if (dropped) {
       const existing = this.conversations.getCachedSummary(channelId) || ''
-      this.haikuResponder.appendToSummary(channelId, dropped, existing)
+      this.haikuResponder.appendToSummary(channelId, dropped, existing, agentId)
         .then(newSummary => this.conversations.setCachedSummary(channelId, newSummary))
         .catch(err => console.error('[gateway] Failed to store conversation summary:', err.message))
     }
