@@ -112,7 +112,23 @@ module.exports = {
         token: optional('EARL_BOT_TOKEN'),
         name: 'UDR',
       },
-      [optional('SOPHIE_CHANNEL_ID') || '1516986529162072208']: {
+
+      [optional('MONET_CHANNEL_ID') || '1517555043363061854']: {
+        agentId: optional('MONET_AGENT_ID') || 'd18113b6-de86-4fa7-8709-b7448504d3c9',
+        token: optional('MONET_BOT_TOKEN'),
+        name: 'Monet',
+      },
+      [optional('DEVI_CHANNEL_ID') || '1517556376426119168']: {
+        agentId: optional('DEVI_AGENT_ID') || '2cd583a6-4b6c-4043-94ae-cc6794493c56',
+        token: optional('DEVI_BOT_TOKEN'),
+        name: 'Devi',
+      },
+      [optional('DESI_CHANNEL_ID') || '1517369742569115778']: {
+        agentId: optional('DESI_AGENT_ID') || 'a76788fe-f9fb-4b60-9a95-d5bc2079bb58',
+        token: optional('DESI_BOT_TOKEN'),
+        name: 'Desi',
+      },
+      [optional('SOPHIE_CHANNEL_ID' || '1516986529162072208']: {
         agentId: optional('SOPHIE_AGENT_ID') || '573ff2a4-0623-4fcd-ac8e-51d7b11d29c8',
         token: optional('DISCORD_BOT_TOKEN_SOPHIE'),
         name: 'Sophie',
