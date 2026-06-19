@@ -9,9 +9,10 @@ async function main() {
   console.log('Starting Discord ↔ Paperclip bridge...')
 
   const hasGateway = !!config.gatewayListener
+  const hasPerAgentBots = config.perAgentBots.length > 0
   const hasLegacyBots = config.bots.length > 0 || !!config.approvalBot
 
-  if (!hasGateway && !hasLegacyBots) {
+  if (!hasGateway && !hasPerAgentBots && !hasLegacyBots) {
     console.error('No bots configured. Set DISCORD_BOT_TOKEN_SOPHIE in .env (or legacy SOPHIE_DISCORD_TOKEN / BOARD_DISCORD_TOKEN).')
     process.exit(1)
   }
@@ -47,11 +48,31 @@ async function main() {
     })
     try {
       await listener.start()
-      console.log('[gateway] Gateway listener started (Sophie + Earl + board-approvals)')
+      console.log('[gateway] Gateway listener started (Sophie: channel + DMs + board-approvals)')
     } catch (err) {
       console.error('[gateway] Failed to start gateway listener:', err.message)
       process.exit(1)
     }
+  }
+
+  // ── Per-agent channel bots (SOA-371) ────────────────────────────────────
+  // One BridgeBot per agent, each using their own token, listening only to their channel.
+  if (hasPerAgentBots) {
+    for (const botConfig of config.perAgentBots) {
+      const bot = new BridgeBot({
+        ...botConfig,
+        paperclip,
+        conversationConfig: config.conversation,
+        haikuResponder,
+      })
+      try {
+        await bot.start()
+        console.log(`[${botConfig.name}] Channel bot started, listening on ${botConfig.channelId}`)
+      } catch (err) {
+        console.error(`[${botConfig.name}] Failed to start channel bot:`, err.message)
+      }
+    }
+    console.log(`[per-agent] ${config.perAgentBots.length} per-agent channel bot(s) started`)
   }
 
   // ── Per-agent DM bots (SOA-156) ─────────────────────────────────────────

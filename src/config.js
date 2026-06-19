@@ -17,10 +17,9 @@ module.exports = {
     companyId: required('PAPERCLIP_COMPANY_ID'),
   },
 
-  // ── Gateway listener (SOA-306) ──────────────────────────────────────────────
-  // Single Discord client using DISCORD_BOT_TOKEN_SOPHIE. Routes DMs to Sophie,
-  // #sophie and #earl-assistant to their respective agents, and #board-approvals
-  // to the inline approval handler. Preferred over the legacy per-bot approach.
+  // ── Gateway listener (SOA-306, SOA-371) ─────────────────────────────────────
+  // Sophie's bot token handles DMs, #sophie-ceo, and #board-approvals.
+  // Angie, Earl, and Paradh are now handled by perAgentBots below (SOA-371).
   gatewayListener: optional('DISCORD_BOT_TOKEN_SOPHIE') ? {
     token: optional('DISCORD_BOT_TOKEN_SOPHIE'),
     dmAgentId: optional('SOPHIE_AGENT_ID', '573ff2a4-0623-4fcd-ac8e-51d7b11d29c8'),
@@ -31,24 +30,36 @@ module.exports = {
         token: optional('DISCORD_BOT_TOKEN_SOPHIE'),
         name: 'Sophie',
       },
-      [optional('EARL_CHANNEL_ID') || '1516986742035447829']: {
-        agentId: optional('EARL_AGENT_ID') || '97d41ad6-1ece-4870-92cb-0ae121c2eeb8',
-        token: optional('EARL_BOT_TOKEN'),
-        name: 'Earl',
-      },
-      [optional('ANGIE_CHANNEL_ID') || '1517300227357409300']: {
-        agentId: optional('ANGIE_AGENT_ID') || '2d259ea5-9446-4c5e-911d-bbe03ec532db',
-        token: optional('ANGIE_BOT_TOKEN'),
-        name: 'Angie',
-      },
-      [optional('PARADH_CHANNEL_ID') || '1517300899389903089']: {
-        agentId: optional('PARADH_AGENT_ID') || 'defdd30b-a5cc-42db-82c2-0c39571e350a',
-        token: optional('PARADH_BOT_TOKEN'),
-        name: 'Paradh',
-      },
     },
     boardApiKey: optional('PAPERCLIP_BOARD_API_KEY') || required('PAPERCLIP_API_KEY'),
   } : null,
+
+  // ── Per-agent channel bots (SOA-371) ─────────────────────────────────────
+  // Each agent connects with their own bot token, listening only to their channel.
+  // Sophie is excluded — her channel + DMs + board-approvals use the gatewayListener above.
+  perAgentBots: [
+    {
+      name: 'angie',
+      displayName: 'Angie',
+      token: optional('ANGIE_BOT_TOKEN'),
+      channelId: optional('ANGIE_CHANNEL_ID') || '1517300227357409300',
+      agentId: optional('ANGIE_AGENT_ID') || '2d259ea5-9446-4c5e-911d-bbe03ec532db',
+    },
+    {
+      name: 'earl',
+      displayName: 'Earl',
+      token: optional('EARL_BOT_TOKEN'),
+      channelId: optional('EARL_CHANNEL_ID') || '1516986742035447829',
+      agentId: optional('EARL_AGENT_ID') || '97d41ad6-1ece-4870-92cb-0ae121c2eeb8',
+    },
+    {
+      name: 'paradh',
+      displayName: 'Paradh',
+      token: optional('PARADH_BOT_TOKEN'),
+      channelId: optional('PARADH_CHANNEL_ID') || '1517300899389903089',
+      agentId: optional('PARADH_AGENT_ID') || 'defdd30b-a5cc-42db-82c2-0c39571e350a',
+    },
+  ].filter(b => b.token),
 
   // ── Legacy per-bot approach (kept for backward compatibility) ────────────
   // Used when DISCORD_BOT_TOKEN_SOPHIE is absent but SOPHIE_DISCORD_TOKEN is set.
