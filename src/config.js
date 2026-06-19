@@ -89,7 +89,16 @@ module.exports = {
     { name: 'vera',   displayName: 'Vera',   agentId: '86b85112-3d7d-46b6-9d15-be9dbcfce31b', token: optional('DISCORD_BOT_TOKEN_VERA') },
   ].filter(b => b.token),
 
-  // Conversation management
+  // ── Haiku conversational tier (SOA-349) ──────────────────────────────────
+  // When both keys are set, incoming Discord messages get a fast Haiku reply
+  // instead of spinning up a full Paperclip agent run.
+  haiku: {
+    anthropicApiKey: optional('ANTHROPIC_API_KEY'),
+    hindsightApiKey: optional('HINDSIGHT_API_KEY'),
+    enabled: !!(optional('ANTHROPIC_API_KEY') && optional('HINDSIGHT_API_KEY')),
+  },
+
+    // Conversation management
   conversation: {
     // Minutes before an idle conversation is closed and a new task is created
     expiryMinutes: parseInt(optional('CONVERSATION_EXPIRY_MINUTES', '30'), 10),
@@ -99,3 +108,4 @@ module.exports = {
     pollTimeoutSeconds: parseInt(optional('POLL_TIMEOUT_SECONDS', '300'), 10),
   },
 }
+
