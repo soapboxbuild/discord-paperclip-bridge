@@ -26,6 +26,66 @@ module.exports = {
     dmAgentId: optional('SOPHIE_AGENT_ID', '573ff2a4-0623-4fcd-ac8e-51d7b11d29c8'),
     boardApprovalsChannelId: optional('BOARD_APPROVALS_CHANNEL_ID', '1516994726320930836'),
     channelRoutes: {
+      [optional('CHANNEL_1517198555922563082') || '1517198555922563082']: {
+        agentId: '97d41ad6-1ece-4870-92cb-0ae121c2eeb8',
+        token: optional('EARL_BOT_TOKEN'),
+        name: 'AvalonBay',
+      },
+      [optional('CHANNEL_1517198550759506072') || '1517198550759506072']: {
+        agentId: '97d41ad6-1ece-4870-92cb-0ae121c2eeb8',
+        token: optional('EARL_BOT_TOKEN'),
+        name: 'Calgary Board of Education',
+      },
+      [optional('CHANNEL_1516986450548232213') || '1516986450548232213']: {
+        agentId: '97d41ad6-1ece-4870-92cb-0ae121c2eeb8',
+        token: optional('EARL_BOT_TOKEN'),
+        name: 'Clarion Partners',
+      },
+      [optional('CHANNEL_1517198525341896734') || '1517198525341896734']: {
+        agentId: '97d41ad6-1ece-4870-92cb-0ae121c2eeb8',
+        token: optional('EARL_BOT_TOKEN'),
+        name: 'Cortland',
+      },
+      [optional('CHANNEL_1517198513325478029') || '1517198513325478029']: {
+        agentId: '97d41ad6-1ece-4870-92cb-0ae121c2eeb8',
+        token: optional('EARL_BOT_TOKEN'),
+        name: 'Greystar',
+      },
+      [optional('CHANNEL_1517198538940088462') || '1517198538940088462']: {
+        agentId: '97d41ad6-1ece-4870-92cb-0ae121c2eeb8',
+        token: optional('EARL_BOT_TOKEN'),
+        name: 'Jonathan Rose',
+      },
+      [optional('CHANNEL_1516986453517926541') || '1516986453517926541']: {
+        agentId: '97d41ad6-1ece-4870-92cb-0ae121c2eeb8',
+        token: optional('EARL_BOT_TOKEN'),
+        name: 'JPMAM',
+      },
+      [optional('CHANNEL_1517198533504270376') || '1517198533504270376']: {
+        agentId: '97d41ad6-1ece-4870-92cb-0ae121c2eeb8',
+        token: optional('EARL_BOT_TOKEN'),
+        name: 'Kennedy Wilson',
+      },
+      [optional('CHANNEL_1517198545021698048') || '1517198545021698048']: {
+        agentId: '97d41ad6-1ece-4870-92cb-0ae121c2eeb8',
+        token: optional('EARL_BOT_TOKEN'),
+        name: 'Schneider Electric',
+      },
+      [optional('CHANNEL_1516986451684888639') || '1516986451684888639']: {
+        agentId: '97d41ad6-1ece-4870-92cb-0ae121c2eeb8',
+        token: optional('EARL_BOT_TOKEN'),
+        name: 'Stoneweg',
+      },
+      [optional('CHANNEL_1517198519860072539') || '1517198519860072539']: {
+        agentId: '97d41ad6-1ece-4870-92cb-0ae121c2eeb8',
+        token: optional('EARL_BOT_TOKEN'),
+        name: 'Tishman',
+      },
+      [optional('CHANNEL_1517031349389885473') || '1517031349389885473']: {
+        agentId: '97d41ad6-1ece-4870-92cb-0ae121c2eeb8',
+        token: optional('EARL_BOT_TOKEN'),
+        name: 'UDR',
+      },
       [optional('SOPHIE_CHANNEL_ID') || '1516986529162072208']: {
         agentId: optional('SOPHIE_AGENT_ID') || '573ff2a4-0623-4fcd-ac8e-51d7b11d29c8',
         token: optional('DISCORD_BOT_TOKEN_SOPHIE'),
