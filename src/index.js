@@ -9,10 +9,10 @@ async function main() {
   console.log('Starting Discord ↔ Paperclip bridge...')
 
   const hasGateway = !!config.gatewayListener
-  const hasPerAgentBots = config.perAgentBots.length > 0
   const hasLegacyBots = config.bots.length > 0 || !!config.approvalBot
+  const hasPerAgentBots = config.perAgentBots.length > 0
 
-  if (!hasGateway && !hasPerAgentBots && !hasLegacyBots) {
+  if (!hasGateway && !hasLegacyBots && !hasPerAgentBots) {
     console.error('No bots configured. Set DISCORD_BOT_TOKEN_SOPHIE in .env (or legacy SOPHIE_DISCORD_TOKEN / BOARD_DISCORD_TOKEN).')
     process.exit(1)
   }
@@ -30,7 +30,7 @@ async function main() {
     console.log('[haiku] HaikuResponder enabled' + (config.haiku.hindsightApiKey ? ' (with Hindsight)' : ' (no Hindsight key)'))
   }
 
-  // ── GatewayListener: single-token multi-channel routing (SOA-306) ────────
+  // ── GatewayListener: Sophie's token — DMs, #sophie-ceo, #board-approvals ──
   if (hasGateway) {
     const approvalPaperclip = new PaperclipClient({
       ...config.paperclip,
@@ -48,15 +48,16 @@ async function main() {
     })
     try {
       await listener.start()
-      console.log('[gateway] Gateway listener started (Sophie: channel + DMs + board-approvals)')
+      console.log('[gateway] Gateway listener started (Sophie + DMs + board-approvals)')
     } catch (err) {
       console.error('[gateway] Failed to start gateway listener:', err.message)
       process.exit(1)
     }
   }
 
-  // ── Per-agent channel bots (SOA-371) ────────────────────────────────────
-  // One BridgeBot per agent, each using their own token, listening only to their channel.
+  // ── Per-agent channel bots (SOA-372) ─────────────────────────────────────
+  // Each agent uses their own bot token so they appear with their own
+  // Discord identity (name/avatar) rather than Sophie's.
   if (hasPerAgentBots) {
     for (const botConfig of config.perAgentBots) {
       const bot = new BridgeBot({
@@ -67,12 +68,12 @@ async function main() {
       })
       try {
         await bot.start()
-        console.log(`[${botConfig.name}] Channel bot started, listening on ${botConfig.channelId}`)
+        console.log(`[${botConfig.name}] Channel bot started, listening on channel ${botConfig.channelId}`)
       } catch (err) {
         console.error(`[${botConfig.name}] Failed to start channel bot:`, err.message)
       }
     }
-    console.log(`[per-agent] ${config.perAgentBots.length} per-agent channel bot(s) started`)
+    console.log(`[channel-bots] ${config.perAgentBots.length} per-agent channel bot(s) started`)
   }
 
   // ── Per-agent DM bots (SOA-156) ─────────────────────────────────────────
