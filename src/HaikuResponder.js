@@ -4,6 +4,10 @@ const path = require('path')
 
 const AGENTS_BASE = '/paperclip/instances/default/companies/bca4541f-fc58-48ce-84f0-7fa71df7c67c/agents'
 const HINDSIGHT_URL = 'https://agent-memory.soapbox.build/mcp'
+const INSTRUCTIONS_CACHE_TTL_MS = 60_000
+
+// { agentId -> { content: string, expiresAt: number } }
+const instructionsCache = new Map()
 
 async function hindsightCall(method, args, apiKey) {
   if (!apiKey) return null
@@ -34,27 +38,34 @@ function extractText(data, maxLen) {
 }
 
 function loadAgentSystemPrompt(agentId, agentName) {
+  const now = Date.now()
+  const cached = instructionsCache.get(agentId)
+  if (cached && now < cached.expiresAt) {
+    return cached.content
+  }
+
   const base = path.join(AGENTS_BASE, agentId, 'instructions')
-
-  let identityContent = ''
+  let parts = []
   try {
-    identityContent = fs.readFileSync(path.join(base, 'IDENTITY.md'), 'utf8')
+    const entries = fs.readdirSync(base)
+    for (const entry of entries.sort()) {
+      if (!entry.endsWith('.md')) continue
+      try {
+        parts.push(fs.readFileSync(path.join(base, entry), 'utf8'))
+      } catch {
+        // skip unreadable file
+      }
+    }
   } catch {
-    // no IDENTITY.md — degrade gracefully
+    // instructions directory not found — degrade gracefully
   }
 
-  let agentsContent = ''
-  try {
-    agentsContent = fs.readFileSync(path.join(base, 'AGENTS.md'), 'utf8').slice(0, 1000)
-  } catch {
-    // no AGENTS.md
-  }
+  const content = parts.length > 0
+    ? parts.join('\n\n')
+    : `You are ${agentName}, an AI agent at Soapbox.`
 
-  if (!identityContent && !agentsContent) {
-    return `You are ${agentName}, an AI agent at Soapbox.`
-  }
-
-  return (identityContent + agentsContent).slice(0, 2000)
+  instructionsCache.set(agentId, { content, expiresAt: now + INSTRUCTIONS_CACHE_TTL_MS })
+  return content
 }
 
 class HaikuResponder {
