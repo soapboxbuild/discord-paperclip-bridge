@@ -138,9 +138,10 @@ class HaikuResponder {
    * @param {string} opts.userMessage
    * @param {string} [opts.channelId]
    * @param {Array<{user:string,agent:string}>} [opts.window] last N message pairs
+   * @param {Array<{author:string,content:string}>} [opts.channelHistory] recent raw channel messages (incl. agent posts)
    * @param {string} [opts.hindsightSummary] earlier-conversation summary from Hindsight
    */
-  async respond({ agentId, agentName, userMessage, channelId = null, window = [], hindsightSummary = '' }) {
+  async respond({ agentId, agentName, userMessage, channelId = null, window = [], channelHistory = [], hindsightSummary = '' }) {
     const [systemBase, hindsightCtx] = await Promise.all([
       loadAgentSystemPrompt(agentId, agentName, this.paperclipApiKey),
       hindsightCall('recall', { query: userMessage }, this.hindsightApiKey).then(d => d ? extractText(d, 1200) : ''),
@@ -156,6 +157,11 @@ class HaikuResponder {
       parts.push(`\n\nEarlier in this conversation:\n${hindsightSummary.slice(0, 300)}`)
     }
 
+    if (channelHistory.length > 0) {
+      const channelLines = channelHistory.map(m => `${m.author}: ${m.content}`).join('\n')
+      parts.push(`\n\nRecent messages in this Discord channel (most recent last; includes your own earlier posts):\n${channelLines}`)
+    }
+
     if (window.length > 0) {
       const historyLines = window.map(p => `Christopher: ${p.user}\n${agentName}: ${p.agent}`).join('\n')
       parts.push(`\n\nRecent conversation:\n${historyLines}`)
@@ -163,6 +169,7 @@ class HaikuResponder {
 
     parts.push(
       '\n\nYou are responding to a Discord message from Christopher. Be concise and direct.',
+      ' Use the recent channel messages above to resolve references like "it", "that", or "move to tomorrow" — do not ask for context that is already shown there.',
       ' If you need to create a task, do work, run code, or take any action beyond a conversational reply,',
       ' end your response with exactly: [WORK_NEEDED] followed by a one-sentence description of the work to initiate.',
     )

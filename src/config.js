@@ -133,6 +133,17 @@ module.exports = {
         token: optional('DISCORD_BOT_TOKEN_SOPHIE'),
         name: 'Sophie',
       },
+
+      // Optional internal test channel routed to Earl — only active when
+      // EARL_TEST_CHANNEL_ID is set. Lets us smoke-test Earl gateway routing
+      // without touching a live customer channel. Unset the var to disable.
+      ...(optional('EARL_TEST_CHANNEL_ID') ? {
+        [optional('EARL_TEST_CHANNEL_ID')]: {
+          agentId: optional('EARL_AGENT_ID') || '97d41ad6-1ece-4870-92cb-0ae121c2eeb8',
+          token: optional('EARL_BOT_TOKEN'),
+          name: 'earl-routing-test',
+        },
+      } : {}),
     },
     boardApiKey: optional('PAPERCLIP_BOARD_API_KEY') || required('PAPERCLIP_API_KEY'),
   } : null,

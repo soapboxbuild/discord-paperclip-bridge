@@ -101,7 +101,7 @@ class GatewayListener {
     const isDM = msg.channel.type === ChannelType.DM || !msg.guild
 
     if (isDM) {
-      return this._handleAgentMessage(msg, this.dmAgentId, 'Sophie', true)
+      return this._handleAgentMessage(msg, this.dmAgentId, 'Sophie', true, null)
     }
 
     if (msg.channelId === this.boardApprovalsChannelId) {
@@ -110,18 +110,42 @@ class GatewayListener {
 
     const route = this.channelRoutes[msg.channelId]
     if (route) {
-      return this._handleAgentMessage(msg, route.agentId, route.name, false)
+      return this._handleAgentMessage(msg, route.agentId, route.name, false, route)
     }
     // Ignore messages in channels not in the routing table
   }
 
+  /**
+   * Fetch recent channel messages for conversational context, INCLUDING posts
+   * from agent bots (e.g. Earl's status check-ins). The Haiku sliding window only
+   * holds prior Haiku exchanges and never the agent's own proactive posts, so
+   * without this a reply like "move to tomorrow" has nothing to resolve against.
+   * Returns oldest-first, excluding the triggering message.
+   */
+  async _fetchChannelHistory(msg, limit = 8) {
+    try {
+      const fetched = await msg.channel.messages.fetch({ limit: limit + 1 })
+      return [...fetched.values()]
+        .filter(m => m.id !== msg.id && (m.content || '').trim())
+        .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
+        .slice(-limit)
+        .map(m => ({ author: m.author.username, content: m.content.slice(0, 400) }))
+    } catch (err) {
+      console.error('[gateway] Failed to fetch channel history:', err.message)
+      return []
+    }
+  }
+
   // ── Agent message handling ────────────────────────────────────────────────
 
-  async _handleAgentMessage(msg, agentId, agentName, isDM) {
+  async _handleAgentMessage(msg, agentId, agentName, isDM, route = null) {
     const channelId = msg.channelId
     const userId = msg.author.id
     const username = msg.author.username
     const userMessage = msg.content.trim()
+    // Respond with the routed agent's own bot identity (e.g. Earl in a customer
+    // channel). DMs and unrouted channels keep the gateway token (Sophie).
+    const botToken = route?.token || this.token
 
     if (!userMessage) return
 
@@ -131,8 +155,11 @@ class GatewayListener {
     if (this.haikuResponder) {
       msg.channel.sendTyping().catch(() => {})
 
-      // Fetch conversation window + Hindsight summary before calling Haiku
+      // Fetch conversation window + Hindsight summary before calling Haiku.
+      // Also pull recent channel history so the agent can see its own prior
+      // posts (e.g. Earl's check-in) that the Haiku window never captures.
       const window = this.conversations.getWindow(channelId)
+      const channelHistory = isDM ? [] : await this._fetchChannelHistory(msg)
       let hindsightSummary = this.conversations.getCachedSummary(channelId)
       if (hindsightSummary === null) {
         hindsightSummary = await this.haikuResponder.recallConversationSummary(channelId, agentId)
@@ -147,6 +174,7 @@ class GatewayListener {
           userMessage,
           channelId,
           window,
+          channelHistory,
           hindsightSummary,
         })
       } catch (err) {
@@ -154,14 +182,10 @@ class GatewayListener {
       }
 
       if (haikuResult && !haikuResult.needsWork) {
-        // Tier 1: pure conversational reply
+        // Tier 1: pure conversational reply — post as the routed agent's identity
         const chunks = this._formatResponse(haikuResult.reply)
         for (let i = 0; i < chunks.length; i++) {
-          if (i === 0) {
-            await msg.reply(chunks[i])
-          } else {
-            await msg.channel.send(chunks[i])
-          }
+          await this._sendAs(channelId, chunks[i], i === 0 ? msg.id : null, botToken)
         }
         this._updateWindow(channelId, userMessage, haikuResult.reply, agentId)
         return
@@ -190,11 +214,11 @@ class GatewayListener {
           const confirmText = haikuResult.reply
             ? `${haikuResult.reply}\n\nOn it — I've kicked off: ${workDesc}. I'll update you when done. (${task.identifier})`
             : `On it — I've kicked off: ${workDesc}. I'll update you when done. (${task.identifier})`
-          await this._sendAs(channelId, confirmText, msg.id, route?.token)
+          await this._sendAs(channelId, confirmText, msg.id, botToken)
           this._updateWindow(channelId, userMessage, confirmText, agentId)
         } catch (err) {
           console.error(`[gateway:${agentName}] Failed to create work task:`, err.message)
-          await this._sendAs(channelId, `⚠️ Could not queue work: ${err.message}`, msg.id, route?.token)
+          await this._sendAs(channelId, `⚠️ Could not queue work: ${err.message}`, msg.id, botToken)
         }
         return
       }
@@ -218,7 +242,7 @@ class GatewayListener {
       return
     }
 
-    await this._sendAs(channelId, '🤔 Working on it...', msg.id, route?.token)
+    await this._sendAs(channelId, '🤔 Working on it...', msg.id, botToken)
     const thinkingMsg = { channel: msg.channel, edit: async () => {}, delete: async () => {} }
     let taskId
     let lastCommentId = null
@@ -258,10 +282,10 @@ class GatewayListener {
       console.log(`[gateway:${agentName}] Created task ${task.identifier} for @${username}`)
     }
 
-    this._waitForResponse(channelId, userId, agentId, agentName, taskId, lastCommentId, thinkingMsg)
+    this._waitForResponse(channelId, userId, agentId, agentName, taskId, lastCommentId, thinkingMsg, botToken)
   }
 
-  async _waitForResponse(channelId, userId, agentId, agentName, taskId, lastCommentId, thinkingMsg) {
+  async _waitForResponse(channelId, userId, agentId, agentName, taskId, lastCommentId, thinkingMsg, botToken) {
     const result = await this.paperclip.pollForResponse(
       taskId,
       agentId,
@@ -274,22 +298,14 @@ class GatewayListener {
 
     if (!result) {
       console.warn(`[gateway:${agentName}] Timeout waiting for response on task ${taskId}`)
-      await this._editOrReply(thinkingMsg, `⏱️ No response from ${agentName} yet — they may be busy. Try again in a moment.`)
+      await this._sendAs(channelId, `⏱️ No response from ${agentName} yet — they may be busy. Try again in a moment.`, null, botToken)
       if (conv) this.conversations.update(channelId, userId, { awaitingResponse: false })
       return
     }
 
     const chunks = this._formatResponse(result.body)
     for (let i = 0; i < chunks.length; i++) {
-      if (i === 0) {
-        await this._editOrReply(thinkingMsg, chunks[i])
-      } else {
-        try {
-          await thinkingMsg.channel.send(chunks[i])
-        } catch (err) {
-          console.error(`[gateway:${agentName}] Failed to send response chunk:`, err.message)
-        }
-      }
+      await this._sendAs(channelId, chunks[i], null, botToken)
     }
 
     if (conv) {
@@ -312,18 +328,6 @@ class GatewayListener {
       this.haikuResponder.appendToSummary(channelId, dropped, existing, agentId)
         .then(newSummary => this.conversations.setCachedSummary(channelId, newSummary))
         .catch(err => console.error('[gateway] Failed to store conversation summary:', err.message))
-    }
-  }
-
-  async _editOrReply(msg, content) {
-    try {
-      await msg.edit(content)
-    } catch (_) {
-      try {
-        await msg.channel.send(content)
-      } catch (err) {
-        console.error('[gateway] Could not send response:', err.message)
-      }
     }
   }
 
