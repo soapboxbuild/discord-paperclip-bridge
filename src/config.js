@@ -36,8 +36,6 @@ async function fetchCustomerChannelRoutes(sophieToken, guildId, customersCategor
   }
 }
 
-module.exports.fetchCustomerChannelRoutes = fetchCustomerChannelRoutes
-
 module.exports = {
   paperclip: {
     apiUrl: optional('PAPERCLIP_API_URL', 'https://org.soapbox.build'),
@@ -209,3 +207,4 @@ module.exports = {
     pollTimeoutSeconds: parseInt(optional('POLL_TIMEOUT_SECONDS', '300'), 10),
   },
 }
+module.exports.fetchCustomerChannelRoutes = fetchCustomerChannelRoutes
