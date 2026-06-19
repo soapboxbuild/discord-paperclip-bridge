@@ -194,6 +194,18 @@ class PaperclipClient {
   }
 
   /**
+   * Create a work task assigned to a Paperclip agent (Tier 2 from Haiku self-initiation).
+   */
+  async createWorkTask({ agentId, title, description }) {
+    return this._post(`/api/companies/${this.companyId}/issues`, {
+      title,
+      description,
+      assigneeAgentId: agentId,
+      status: 'todo',
+    })
+  }
+
+    /**
    * Wake a Paperclip agent by ID.
    */
   async wakeupAgent(agentId) {
@@ -217,3 +229,4 @@ function sleep(ms) {
 }
 
 module.exports = PaperclipClient
+
