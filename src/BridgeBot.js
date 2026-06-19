@@ -75,9 +75,25 @@ class BridgeBot {
     // ── Tier 1 / Tier 2: Haiku fast response ──────────────────────────────
     if (this.haikuResponder) {
       msg.channel.sendTyping().catch(() => {})
+
+      // Fetch conversation window + Hindsight summary before calling Haiku
+      const window = this.conversations.getWindow(channelId)
+      let hindsightSummary = this.conversations.getCachedSummary(channelId)
+      if (hindsightSummary === null) {
+        hindsightSummary = await this.haikuResponder.recallConversationSummary(channelId)
+        this.conversations.setCachedSummary(channelId, hindsightSummary)
+      }
+
       let haikuResult = null
       try {
-        haikuResult = await this.haikuResponder.respond({ agentId: this.agentId, agentName: this.displayName, userMessage })
+        haikuResult = await this.haikuResponder.respond({
+          agentId: this.agentId,
+          agentName: this.displayName,
+          userMessage,
+          channelId,
+          window,
+          hindsightSummary,
+        })
       } catch (err) {
         console.error(`[${this.name}] Haiku error, falling back to full agent:`, err.message)
       }
@@ -88,6 +104,7 @@ class BridgeBot {
           if (i === 0) await msg.reply(chunks[i])
           else await msg.channel.send(chunks[i])
         }
+        this._updateWindow(channelId, userMessage, haikuResult.reply)
         return
       }
 
@@ -114,6 +131,7 @@ class BridgeBot {
             ? `${haikuResult.reply}\n\nOn it — I've kicked off: ${workDesc}. I'll update you when done. (${task.identifier})`
             : `On it — I've kicked off: ${workDesc}. I'll update you when done. (${task.identifier})`
           await msg.reply(confirmText.slice(0, 1900))
+          this._updateWindow(channelId, userMessage, confirmText)
         } catch (err) {
           console.error(`[${this.name}] Failed to create work task:`, err.message)
           await msg.reply(`⚠️ Could not queue work: ${err.message}`)
@@ -255,6 +273,20 @@ class BridgeBot {
       } catch (e) {
         console.error(`[${this.name}] Could not send fallback message:`, e.message)
       }
+    }
+  }
+
+  /**
+   * Add a Haiku exchange to the sliding window and fire-and-forget Hindsight summarisation
+   * when a pair is dropped from the window.
+   */
+  _updateWindow(channelId, userMsg, agentReply) {
+    const dropped = this.conversations.addToWindow(channelId, userMsg, agentReply)
+    if (dropped) {
+      const existing = this.conversations.getCachedSummary(channelId) || ''
+      this.haikuResponder.appendToSummary(channelId, dropped, existing)
+        .then(newSummary => this.conversations.setCachedSummary(channelId, newSummary))
+        .catch(err => console.error(`[${this.name}] Failed to store conversation summary:`, err.message))
     }
   }
 
