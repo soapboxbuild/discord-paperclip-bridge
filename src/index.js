@@ -31,6 +31,19 @@ async function main() {
   }
 
   // ── GatewayListener: Sophie's token — DMs, #sophie-ceo, #board-approvals ──
+  // Dynamically add all customer channels (Customers category) to Earl's routes
+  if (config.gatewayListener) {
+    const { fetchCustomerChannelRoutes } = require('./config')
+    const customerRoutes = await fetchCustomerChannelRoutes(
+      config.gatewayListener.token,
+      process.env.GUILD_ID || '1513704643350233158',
+      process.env.CUSTOMERS_CATEGORY_ID || '1516986449856172114',
+      '97d41ad6-1ece-4870-92cb-0ae121c2eeb8',
+      process.env.EARL_BOT_TOKEN
+    )
+    Object.assign(config.gatewayListener.channelRoutes, customerRoutes)
+  }
+
   if (hasGateway) {
     const approvalPaperclip = new PaperclipClient({
       ...config.paperclip,

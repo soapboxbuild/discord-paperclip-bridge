@@ -10,6 +10,34 @@ function optional(name, fallback = null) {
   return process.env[name] || fallback
 }
 
+
+/**
+ * Fetch all text channels in the Customers Discord category and add them as Earl routes.
+ * Called at startup so new customers Earl creates are automatically included.
+ */
+async function fetchCustomerChannelRoutes(sophieToken, guildId, customersCategoryId, earlAgentId, earlToken) {
+  try {
+    const res = await fetch(`https://discord.com/api/v10/guilds/${guildId}/channels`, {
+      headers: { Authorization: `Bot ${sophieToken}` }
+    })
+    if (!res.ok) return {}
+    const channels = await res.json()
+    const routes = {}
+    for (const ch of channels) {
+      if (ch.type === 0 && ch.parent_id === customersCategoryId) {
+        routes[ch.id] = { agentId: earlAgentId, token: earlToken, name: ch.name }
+      }
+    }
+    console.log(`[config] Discovered ${Object.keys(routes).length} customer channels for Earl`)
+    return routes
+  } catch (err) {
+    console.error('[config] Failed to fetch customer channels:', err.message)
+    return {}
+  }
+}
+
+module.exports.fetchCustomerChannelRoutes = fetchCustomerChannelRoutes
+
 module.exports = {
   paperclip: {
     apiUrl: optional('PAPERCLIP_API_URL', 'https://org.soapbox.build'),
