@@ -62,7 +62,7 @@ class HaikuResponder {
    * Persist the rolling conversation summary for a channel to Hindsight.
    */
   async storeConversationSummary(channelId, summary) {
-    await hindsightCall('store', { key: `conversation_summary_${channelId}`, content: summary }, this.hindsightApiKey)
+    await hindsightCall('sync_retain', { key: `conversation_summary_${channelId}`, content: summary }, this.hindsightApiKey)
   }
 
   /**
