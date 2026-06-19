@@ -21,6 +21,26 @@ const REJECT_TRIGGERS = ['not yet', 'hold on', 'rejected', 'reject', 'nope', 'no
  */
 class GatewayListener {
   /**
+   * Send a Discord message using a specific bot token (not the main client).
+   * This ensures each agent responds with their own bot identity.
+   */
+  async _sendAs(channelId, content, replyToMsgId, botToken) {
+    const token = botToken || this.token
+    const body = { content: content.slice(0, 1900) }
+    if (replyToMsgId) body.message_reference = { message_id: replyToMsgId }
+    const res = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bot ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) {
+      // Fallback to main client if agent token fails
+      const channel = await this.client.channels.fetch(channelId).catch(() => null)
+      if (channel) await channel.send(body.content).catch(() => {})
+    }
+  }
+
+  /**
    * @param {object} opts
    * @param {string} opts.token - Discord bot token
    * @param {Object.<string,{agentId:string,name:string}>} opts.channelRoutes - channelId → agent
@@ -170,11 +190,11 @@ class GatewayListener {
           const confirmText = haikuResult.reply
             ? `${haikuResult.reply}\n\nOn it — I've kicked off: ${workDesc}. I'll update you when done. (${task.identifier})`
             : `On it — I've kicked off: ${workDesc}. I'll update you when done. (${task.identifier})`
-          await msg.reply(confirmText.slice(0, 1900))
+          await this._sendAs(channelId, confirmText, msg.id, route?.token)
           this._updateWindow(channelId, userMessage, confirmText, agentId)
         } catch (err) {
           console.error(`[gateway:${agentName}] Failed to create work task:`, err.message)
-          await msg.reply(`⚠️ Could not queue work: ${err.message}`)
+          await this._sendAs(channelId, `⚠️ Could not queue work: ${err.message}`, msg.id, route?.token)
         }
         return
       }
@@ -198,7 +218,8 @@ class GatewayListener {
       return
     }
 
-    const thinkingMsg = await msg.reply('🤔 Working on it...')
+    await this._sendAs(channelId, '🤔 Working on it...', msg.id, route?.token)
+    const thinkingMsg = { channel: msg.channel, edit: async () => {}, delete: async () => {} }
     let taskId
     let lastCommentId = null
 
