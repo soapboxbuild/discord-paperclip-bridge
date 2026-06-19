@@ -3,6 +3,7 @@ const PaperclipClient = require('./PaperclipClient')
 const BridgeBot = require('./BridgeBot')
 const ApprovalBot = require('./ApprovalBot')
 const GatewayListener = require('./GatewayListener')
+const HaikuResponder = require('./HaikuResponder')
 
 async function main() {
   console.log('Starting Discord ↔ Paperclip bridge...')
@@ -23,6 +24,10 @@ async function main() {
       ...config.paperclip,
       apiKey: config.gatewayListener.boardApiKey,
     })
+    const haikuResponder = config.haiku.enabled
+      ? new HaikuResponder({ anthropicApiKey: config.haiku.anthropicApiKey, hindsightApiKey: config.haiku.hindsightApiKey })
+      : null
+    if (haikuResponder) console.log('[haiku] Haiku tier enabled')
     const listener = new GatewayListener({
       token: config.gatewayListener.token,
       channelRoutes: config.gatewayListener.channelRoutes,
@@ -31,6 +36,7 @@ async function main() {
       paperclip,
       approvalPaperclip,
       conversationConfig: config.conversation,
+      haikuResponder,
     })
     try {
       await listener.start()
