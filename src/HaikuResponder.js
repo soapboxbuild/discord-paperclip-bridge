@@ -6,6 +6,7 @@ const AGENTS_BASE = '/paperclip/instances/default/companies/bca4541f-fc58-48ce-8
 const HINDSIGHT_URL = 'https://agent-memory.soapbox.build/mcp'
 
 async function recallHindsight(query, apiKey) {
+  if (!apiKey) return ''
   try {
     const res = await fetch(HINDSIGHT_URL, {
       method: 'POST',
@@ -17,11 +18,15 @@ async function recallHindsight(query, apiKey) {
         method: 'tools/call',
         params: { name: 'recall', arguments: { query, bank_id: 'soapbox' } },
       }),
+      signal: AbortSignal.timeout(5000),
     })
     if (!res.ok) return ''
     const data = await res.json()
-    const text = data?.result?.content?.[0]?.text || ''
-    return text.slice(0, 1200)
+    const content = data?.result?.content
+    if (Array.isArray(content)) {
+      return content.filter(c => c.type === 'text').map(c => c.text || '').join('\n').slice(0, 1200)
+    }
+    return ''
   } catch {
     return ''
   }

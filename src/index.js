@@ -18,6 +18,16 @@ async function main() {
 
   const paperclip = new PaperclipClient(config.paperclip)
 
+  const haikuResponder = config.haiku.enabled
+    ? new HaikuResponder({
+        anthropicApiKey: config.haiku.anthropicApiKey,
+        hindsightApiKey: config.haiku.hindsightApiKey,
+      })
+    : null
+  if (haikuResponder) {
+    console.log('[haiku] HaikuResponder enabled' + (config.haiku.hindsightApiKey ? ' (with Hindsight)' : ' (no Hindsight key)'))
+  }
+
   // ── GatewayListener: single-token multi-channel routing (SOA-306) ────────
   if (hasGateway) {
     const approvalPaperclip = new PaperclipClient({
@@ -56,6 +66,7 @@ async function main() {
         channelId: null,
         paperclip,
         conversationConfig: config.conversation,
+        haikuResponder,
       })
       try {
         await bot.start()
@@ -73,6 +84,7 @@ async function main() {
       ...botConfig,
       paperclip,
       conversationConfig: config.conversation,
+      haikuResponder,
     }))
 
     await Promise.all(bots.map(async bot => {

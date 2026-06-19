@@ -95,7 +95,7 @@ module.exports = {
   haiku: {
     anthropicApiKey: optional('ANTHROPIC_API_KEY'),
     hindsightApiKey: optional('HINDSIGHT_API_KEY'),
-    enabled: !!(optional('ANTHROPIC_API_KEY') && optional('HINDSIGHT_API_KEY')),
+    enabled: !!optional('ANTHROPIC_API_KEY'),
   },
 
     // Conversation management
