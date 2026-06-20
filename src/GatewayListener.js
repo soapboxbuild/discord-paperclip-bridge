@@ -1,5 +1,9 @@
+const fs = require('fs')
+const path = require('path')
 const { Client, GatewayIntentBits, Events, ChannelType, Partials } = require('discord.js')
 const ConversationManager = require('./ConversationManager')
+
+const NOTIFIED_IDS_PATH = process.env.NOTIFIED_IDS_PATH || '/app/data/notified-ids.json'
 
 const DISCORD_MSG_LIMIT = 1900
 const APPROVAL_POLL_INTERVAL_MS = 60_000
@@ -64,7 +68,7 @@ class GatewayListener {
     this.conversations = new ConversationManager({ expiryMinutes: conversationConfig.expiryMinutes })
 
     this.pendingApprovals = []
-    this.notifiedIds = new Set()
+    this.notifiedIds = this._loadNotifiedIds()
 
     this.client = new Client({
       intents: [
@@ -432,9 +436,7 @@ class GatewayListener {
       }
       this.pendingApprovals.splice(targetIndex, 1)
       this.notifiedIds.delete(approval.id)
-      await this.approvalPaperclip.wakeupAgent(this.dmAgentId).catch(err => {
-        console.error('[gateway] Failed to wake Sophie after approval:', err.message)
-      })
+      this._persistNotifiedIds()
     } catch (err) {
       console.error(`[gateway] Failed to ${action} approval ${approval.id}:`, err.message)
       await msg.reply(`⚠️ Failed to ${action}: ${err.message}`)
@@ -457,9 +459,11 @@ class GatewayListener {
     await this._refreshPendingApprovals()
 
     const currentIds = new Set(this.pendingApprovals.map(a => a.id))
+    let staleRemoved = false
     for (const id of this.notifiedIds) {
-      if (!currentIds.has(id)) this.notifiedIds.delete(id)
+      if (!currentIds.has(id)) { this.notifiedIds.delete(id); staleRemoved = true }
     }
+    if (staleRemoved) this._persistNotifiedIds()
 
     const newApprovals = this.pendingApprovals.slice().reverse().filter(a => !this.notifiedIds.has(a.id))
     if (newApprovals.length === 0) return
@@ -480,9 +484,32 @@ class GatewayListener {
         lines.push('', 'Reply yes or no.')
         await channel.send(lines.join('\n'))
         this.notifiedIds.add(approval.id)
+        this._persistNotifiedIds()
       } catch (err) {
         console.error(`[gateway] Failed to post approval notification for ${approval.id}:`, err.message)
       }
+    }
+  }
+
+  _loadNotifiedIds() {
+    try {
+      const raw = fs.readFileSync(NOTIFIED_IDS_PATH, 'utf8')
+      const ids = JSON.parse(raw)
+      if (Array.isArray(ids)) {
+        console.log(`[gateway] Loaded ${ids.length} persisted notified IDs from ${NOTIFIED_IDS_PATH}`)
+        return new Set(ids)
+      }
+    } catch (_) {}
+    return new Set()
+  }
+
+  _persistNotifiedIds() {
+    try {
+      const dir = path.dirname(NOTIFIED_IDS_PATH)
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(NOTIFIED_IDS_PATH, JSON.stringify([...this.notifiedIds]))
+    } catch (err) {
+      console.error('[gateway] Failed to persist notified IDs:', err.message)
     }
   }
 }

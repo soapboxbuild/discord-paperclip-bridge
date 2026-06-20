@@ -38,6 +38,9 @@ async function fetchCustomerChannelRoutes(sophieToken, guildId, customersCategor
 
 module.exports = {
   paperclip: {
+    // When running inside Railway, set PAPERCLIP_API_URL to the Paperclip service's private
+    // Railway domain (e.g. paperclip.railway.internal) to avoid Railway edge hairpin termination
+    // that causes "Premature close" errors and floods logs with 60s approval poll retries.
     apiUrl: optional('PAPERCLIP_API_URL', 'https://org.soapbox.build'),
     apiKey: required('PAPERCLIP_API_KEY'),
     companyId: required('PAPERCLIP_COMPANY_ID'),
@@ -200,7 +203,7 @@ module.exports = {
     { name: 'devi',   displayName: 'Devi',   agentId: '2cd583a6-4b6c-4043-94ae-cc6794493c56', token: optional('DISCORD_BOT_TOKEN_DEVI') },
     { name: 'monet',  displayName: 'Monet',  agentId: 'd18113b6-de86-4fa7-8709-b7448504d3c9', token: optional('DISCORD_BOT_TOKEN_MONET') },
     { name: 'paradh', displayName: 'Paradh', agentId: 'defdd30b-a5cc-42db-82c2-0c39571e350a', token: optional('DISCORD_BOT_TOKEN_PARADH') },
-    { name: 'leon',   displayName: 'Leon',   agentId: 'ac30abc9-6dc3-426b-8726-23680a925450', token: optional('DISCORD_BOT_TOKEN_LEON') },
+    { name: 'leon',   displayName: 'Assam',   agentId: 'ac30abc9-6dc3-426b-8726-23680a925450', token: optional('DISCORD_BOT_TOKEN_LEON') },
     { name: 'vera',   displayName: 'Vera',   agentId: '86b85112-3d7d-46b6-9d15-be9dbcfce31b', token: optional('DISCORD_BOT_TOKEN_VERA') },
   ].filter(b => b.token),
 
