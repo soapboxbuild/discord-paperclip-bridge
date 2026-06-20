@@ -84,6 +84,9 @@ class BridgeBot {
         this.conversations.setCachedSummary(channelId, hindsightSummary)
       }
 
+      // Bug 3 fix: fetch recent channel messages (including bot posts) for Haiku context
+      const channelHistory = await this._fetchChannelHistory(msg)
+
       let haikuResult = null
       try {
         haikuResult = await this.haikuResponder.respond({
@@ -92,6 +95,7 @@ class BridgeBot {
           userMessage,
           channelId,
           window,
+          channelHistory,
           hindsightSummary,
         })
       } catch (err) {
@@ -273,6 +277,27 @@ class BridgeBot {
       } catch (e) {
         console.error(`[${this.name}] Could not send fallback message:`, e.message)
       }
+    }
+  }
+
+  /**
+   * Bug 3 fix: fetch recent channel messages for Haiku context, including agent bot posts.
+   * Provides context even after restart when the in-memory window is empty, and
+   * lets Haiku resolve references to prior agent messages (e.g. status check-ins).
+   * @param {import('discord.js').Message} msg - the triggering message (excluded from results)
+   * @returns {Promise<Array<{author:string,content:string}>>}
+   */
+  async _fetchChannelHistory(msg, limit = 8) {
+    try {
+      const fetched = await msg.channel.messages.fetch({ limit: limit + 1 })
+      return [...fetched.values()]
+        .filter(m => m.id !== msg.id && (m.content || '').trim())
+        .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
+        .slice(-limit)
+        .map(m => ({ author: m.author.username, content: m.content.slice(0, 400) }))
+    } catch (err) {
+      console.error(`[${this.name}] Failed to fetch channel history:`, err.message)
+      return []
     }
   }
 

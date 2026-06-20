@@ -205,11 +205,13 @@ class PaperclipClient {
     })
   }
 
-    /**
+  /**
    * Wake a Paperclip agent by ID.
+   * @param {string} agentId
+   * @param {object} [payload] optional context payload (e.g. { reason, approvalId, title })
    */
-  async wakeupAgent(agentId) {
-    return this._post(`/api/agents/${agentId}/wakeup`, {})
+  async wakeupAgent(agentId, payload = {}) {
+    return this._post(`/api/agents/${agentId}/wakeup`, payload)
   }
 
   /**

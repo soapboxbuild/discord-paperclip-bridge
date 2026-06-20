@@ -1,6 +1,5 @@
 const Anthropic = require('@anthropic-ai/sdk')
 
-const PAPERCLIP_API_URL = 'https://org.soapbox.build'
 const HINDSIGHT_URL = 'https://agent-memory.soapbox.build/mcp'
 const INSTRUCTIONS_CACHE_TTL_MS = 60_000
 const MAX_SYSTEM_PROMPT_CHARS = 12_000 // ~3000 tokens
@@ -39,7 +38,7 @@ function extractText(data, maxLen) {
   return content.filter(c => c.type === 'text').map(c => c.text || '').join('\n').slice(0, maxLen)
 }
 
-async function loadAgentSystemPrompt(agentId, agentName, paperclipApiKey) {
+async function loadAgentSystemPrompt(agentId, agentName, paperclipApiKey, paperclipApiUrl) {
   const now = Date.now()
   const cached = instructionsCache.get(agentId)
   if (cached && now < cached.expiresAt) {
@@ -48,7 +47,7 @@ async function loadAgentSystemPrompt(agentId, agentName, paperclipApiKey) {
 
   let content
   try {
-    const res = await fetch(`${PAPERCLIP_API_URL}/api/agents/${agentId}/instructions-bundle`, {
+    const res = await fetch(`${paperclipApiUrl}/api/agents/${agentId}/instructions-bundle`, {
       headers: { 'Authorization': `Bearer ${paperclipApiKey}` },
       signal: AbortSignal.timeout(8000),
     })
@@ -78,10 +77,11 @@ async function loadAgentSystemPrompt(agentId, agentName, paperclipApiKey) {
 }
 
 class HaikuResponder {
-  constructor({ anthropicApiKey, hindsightApiKey, paperclipApiKey = null }) {
+  constructor({ anthropicApiKey, hindsightApiKey, paperclipApiKey = null, paperclipApiUrl = 'https://org.soapbox.build' }) {
     this.client = new Anthropic({ apiKey: anthropicApiKey })
     this.hindsightApiKey = hindsightApiKey
     this.paperclipApiKey = paperclipApiKey
+    this.paperclipApiUrl = paperclipApiUrl
   }
 
   /**
@@ -137,13 +137,13 @@ class HaikuResponder {
    * @param {string} opts.agentName
    * @param {string} opts.userMessage
    * @param {string} [opts.channelId]
-   * @param {Array<{user:string,agent:string}>} [opts.window] last N message pairs
-   * @param {Array<{author:string,content:string}>} [opts.channelHistory] recent raw channel messages (incl. agent posts)
+   * @param {Array<{user:string,agent:string}>} [opts.window] last N message pairs (in-memory sliding window)
+   * @param {Array<{author:string,content:string}>} [opts.channelHistory] recent raw channel messages incl. agent posts (from Discord API)
    * @param {string} [opts.hindsightSummary] earlier-conversation summary from Hindsight
    */
   async respond({ agentId, agentName, userMessage, channelId = null, window = [], channelHistory = [], hindsightSummary = '' }) {
     const [systemBase, hindsightCtx] = await Promise.all([
-      loadAgentSystemPrompt(agentId, agentName, this.paperclipApiKey),
+      loadAgentSystemPrompt(agentId, agentName, this.paperclipApiKey, this.paperclipApiUrl),
       hindsightCall('recall', { query: userMessage }, this.hindsightApiKey).then(d => d ? extractText(d, 1200) : ''),
     ])
 

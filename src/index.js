@@ -24,6 +24,7 @@ async function main() {
         anthropicApiKey: config.haiku.anthropicApiKey,
         hindsightApiKey: config.haiku.hindsightApiKey,
         paperclipApiKey: config.gatewayListener?.boardApiKey ?? config.paperclip.apiKey,
+        paperclipApiUrl: config.paperclip.apiUrl,
       })
     : null
   if (haikuResponder) {

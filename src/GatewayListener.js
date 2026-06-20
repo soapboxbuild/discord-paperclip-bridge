@@ -3,6 +3,7 @@ const ConversationManager = require('./ConversationManager')
 
 const DISCORD_MSG_LIMIT = 1900
 const APPROVAL_POLL_INTERVAL_MS = 60_000
+const REDIS_NOTIFIED_KEY = 'discord-bridge:notified-approval-ids'
 
 // Multi-word triggers must come before their single-word prefixes to prevent partial matches
 const APPROVE_TRIGGERS = ['go ahead', 'looks good', 'approved', 'approve', 'yes', 'y', 'ok', 'sure']
@@ -78,6 +79,7 @@ class GatewayListener {
 
     this.pendingApprovals = []
     this.notifiedIds = new Set()
+    this.redis = null
 
     this.client = new Client({
       intents: [
@@ -105,6 +107,20 @@ class GatewayListener {
   }
 
   async start() {
+    // Bug 4 fix: persist notifiedIds in Redis so it survives Railway redeploys
+    if (process.env.REDIS_URL) {
+      try {
+        const Redis = require('ioredis')
+        this.redis = new Redis(process.env.REDIS_URL, { lazyConnect: true, enableOfflineQueue: false })
+        await this.redis.connect()
+        const ids = await this.redis.smembers(REDIS_NOTIFIED_KEY)
+        for (const id of ids) this.notifiedIds.add(id)
+        console.log(`[gateway] Loaded ${ids.length} notified approval ID(s) from Redis`)
+      } catch (err) {
+        console.error('[gateway] Redis init failed, notifiedIds will be in-memory only:', err.message)
+        this.redis = null
+      }
+    }
     await this.client.login(this.token)
   }
 
@@ -207,6 +223,7 @@ class GatewayListener {
       if (haikuResult && haikuResult.needsWork) {
         // Tier 2: create Paperclip work task + wake agent
         const workDesc = haikuResult.workDescription || `Discord message from @${username}`
+        const route = this.channelRoutes[channelId]
         try {
           const task = await this.paperclip.createWorkTask({
             agentId,
@@ -448,8 +465,17 @@ class GatewayListener {
         await this.approvalPaperclip.rejectApproval(approval.id, note)
       }
       this.pendingApprovals.splice(targetIndex, 1)
-      this.notifiedIds.delete(approval.id)
-      await this.approvalPaperclip.wakeupAgent(this.dmAgentId).catch(err => {
+      this._removeNotifiedId(approval.id)
+
+      // Bug 2 fix: pass context payload so Sophie wakes with resolution info.
+      // The Paperclip server also wakes the requesting agent with full context;
+      // this wakeup passes complementary context for the bridge's perspective.
+      this.approvalPaperclip.wakeupAgent(this.dmAgentId, {
+        reason: 'approval_resolved',
+        approvalId: approval.id,
+        approvalStatus: action === 'approve' ? 'approved' : 'rejected',
+        title,
+      }).catch(err => {
         console.error('[gateway] Failed to wake Sophie after approval:', err.message)
       })
     } catch (err) {
@@ -474,8 +500,8 @@ class GatewayListener {
     await this._refreshPendingApprovals()
 
     const currentIds = new Set(this.pendingApprovals.map(a => a.id))
-    for (const id of this.notifiedIds) {
-      if (!currentIds.has(id)) this.notifiedIds.delete(id)
+    for (const id of [...this.notifiedIds]) {
+      if (!currentIds.has(id)) this._removeNotifiedId(id)
     }
 
     const newApprovals = this.pendingApprovals.slice().reverse().filter(a => !this.notifiedIds.has(a.id))
@@ -496,10 +522,29 @@ class GatewayListener {
         if (summary) lines.push(summary)
         lines.push('', 'Reply yes or no.')
         await channel.send(lines.join('\n'))
-        this.notifiedIds.add(approval.id)
+        this._addNotifiedId(approval.id)
       } catch (err) {
         console.error(`[gateway] Failed to post approval notification for ${approval.id}:`, err.message)
       }
+    }
+  }
+
+  // Bug 4 fix: persist notifiedIds to Redis so restarts don't cause duplicate announcements.
+  _addNotifiedId(id) {
+    this.notifiedIds.add(id)
+    if (this.redis) {
+      this.redis.sadd(REDIS_NOTIFIED_KEY, id).catch(err =>
+        console.error('[gateway] Redis SADD failed:', err.message)
+      )
+    }
+  }
+
+  _removeNotifiedId(id) {
+    this.notifiedIds.delete(id)
+    if (this.redis) {
+      this.redis.srem(REDIS_NOTIFIED_KEY, id).catch(err =>
+        console.error('[gateway] Redis SREM failed:', err.message)
+      )
     }
   }
 }
