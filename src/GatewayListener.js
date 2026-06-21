@@ -1,5 +1,9 @@
+const fs = require('fs')
+const path = require('path')
 const { Client, GatewayIntentBits, Events, ChannelType, Partials } = require('discord.js')
 const ConversationManager = require('./ConversationManager')
+
+const NOTIFIED_IDS_PATH = process.env.NOTIFIED_IDS_PATH || '/app/data/notified-ids.json'
 
 const DISCORD_MSG_LIMIT = 1900
 const APPROVAL_POLL_INTERVAL_MS = 60_000
@@ -21,6 +25,26 @@ const REJECT_TRIGGERS = ['not yet', 'hold on', 'rejected', 'reject', 'nope', 'no
  */
 class GatewayListener {
   /**
+   * Send a Discord message using a specific bot token (not the main client).
+   * This ensures each agent responds with their own bot identity.
+   */
+  async _sendAs(channelId, content, replyToMsgId, botToken) {
+    const token = botToken || this.token
+    const body = { content: content.slice(0, 1900) }
+    if (replyToMsgId) body.message_reference = { message_id: replyToMsgId }
+    const res = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bot ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) {
+      // Fallback to main client if agent token fails
+      const channel = await this.client.channels.fetch(channelId).catch(() => null)
+      if (channel) await channel.send(body.content).catch(() => {})
+    }
+  }
+
+  /**
    * @param {object} opts
    * @param {string} opts.token - Discord bot token
    * @param {Object.<string,{agentId:string,name:string}>} opts.channelRoutes - channelId → agent
@@ -30,7 +54,7 @@ class GatewayListener {
    * @param {import('./PaperclipClient')} opts.approvalPaperclip - For approval resolution (board API key)
    * @param {object} opts.conversationConfig - { expiryMinutes, pollIntervalSeconds, pollTimeoutSeconds }
    */
-  constructor({ token, channelRoutes, dmAgentId, boardApprovalsChannelId, paperclip, approvalPaperclip, conversationConfig }) {
+  constructor({ token, channelRoutes, dmAgentId, boardApprovalsChannelId, paperclip, approvalPaperclip, conversationConfig, haikuResponder = null }) {
     this.token = token
     this.channelRoutes = channelRoutes
     this.dmAgentId = dmAgentId
@@ -39,11 +63,12 @@ class GatewayListener {
     this.approvalPaperclip = approvalPaperclip
     this.pollIntervalMs = conversationConfig.pollIntervalSeconds * 1000
     this.pollTimeoutMs = conversationConfig.pollTimeoutSeconds * 1000
+    this.haikuResponder = haikuResponder
 
     this.conversations = new ConversationManager({ expiryMinutes: conversationConfig.expiryMinutes })
 
     this.pendingApprovals = []
-    this.notifiedIds = new Set()
+    this.notifiedIds = this._loadNotifiedIds()
 
     this.client = new Client({
       intents: [
@@ -106,6 +131,81 @@ class GatewayListener {
 
     console.log(`[gateway:${agentName}] Received ${isDM ? 'DM' : 'message'} from @${username}: ${userMessage.slice(0, 80)}`)
 
+    // ── Tier 1 / Tier 2: Haiku fast response ──────────────────────────────
+    if (this.haikuResponder) {
+      msg.channel.sendTyping().catch(() => {})
+
+      // Fetch conversation window + Hindsight summary before calling Haiku
+      const window = this.conversations.getWindow(channelId)
+      let hindsightSummary = this.conversations.getCachedSummary(channelId)
+      if (hindsightSummary === null) {
+        hindsightSummary = await this.haikuResponder.recallConversationSummary(channelId, agentId)
+        this.conversations.setCachedSummary(channelId, hindsightSummary)
+      }
+
+      let haikuResult = null
+      try {
+        haikuResult = await this.haikuResponder.respond({
+          agentId,
+          agentName,
+          userMessage,
+          channelId,
+          window,
+          hindsightSummary,
+        })
+      } catch (err) {
+        console.error(`[gateway:${agentName}] Haiku error, falling back to full agent:`, err.message)
+      }
+
+      if (haikuResult && !haikuResult.needsWork) {
+        // Tier 1: pure conversational reply
+        const chunks = this._formatResponse(haikuResult.reply)
+        for (let i = 0; i < chunks.length; i++) {
+          if (i === 0) {
+            await msg.reply(chunks[i])
+          } else {
+            await msg.channel.send(chunks[i])
+          }
+        }
+        this._updateWindow(channelId, userMessage, haikuResult.reply, agentId)
+        return
+      }
+
+      if (haikuResult && haikuResult.needsWork) {
+        // Tier 2: create Paperclip work task + wake agent
+        const workDesc = haikuResult.workDescription || `Discord message from @${username}`
+        try {
+          const task = await this.paperclip.createWorkTask({
+            agentId,
+            title: `Discord: ${userMessage.slice(0, 80)}`,
+            description: [
+              `**Discord ${isDM ? 'DM' : 'message'} from @${username}:**`,
+              '',
+              userMessage,
+              '',
+              '---',
+              '',
+              `*Work initiated via Haiku tier. Request: ${workDesc}*`,
+            ].join('\n'),
+          })
+          await this.paperclip.wakeupAgent(agentId).catch(err => {
+            console.error(`[gateway:${agentName}] Failed to wake agent after Tier 2:`, err.message)
+          })
+          const confirmText = haikuResult.reply
+            ? `${haikuResult.reply}\n\nOn it — I've kicked off: ${workDesc}. I'll update you when done. (${task.identifier})`
+            : `On it — I've kicked off: ${workDesc}. I'll update you when done. (${task.identifier})`
+          await this._sendAs(channelId, confirmText, msg.id, route?.token)
+          this._updateWindow(channelId, userMessage, confirmText, agentId)
+        } catch (err) {
+          console.error(`[gateway:${agentName}] Failed to create work task:`, err.message)
+          await this._sendAs(channelId, `⚠️ Could not queue work: ${err.message}`, msg.id, route?.token)
+        }
+        return
+      }
+      // Haiku threw — fall through to full-agent flow below
+    }
+
+    // ── Full agent run (fallback / when Haiku disabled) ────────────────────
     let conv = this.conversations.get(channelId, userId)
 
     if (conv && conv.awaitingResponse) {
@@ -122,7 +222,8 @@ class GatewayListener {
       return
     }
 
-    const thinkingMsg = await msg.reply('🤔 Working on it...')
+    await this._sendAs(channelId, '🤔 Working on it...', msg.id, route?.token)
+    const thinkingMsg = { channel: msg.channel, edit: async () => {}, delete: async () => {} }
     let taskId
     let lastCommentId = null
 
@@ -201,6 +302,20 @@ class GatewayListener {
         lastCommentId: result.lastCommentId,
         thinkingMessageId: null,
       })
+    }
+  }
+
+  /**
+   * Add a Haiku exchange to the sliding window and fire-and-forget Hindsight summarisation
+   * when a pair is dropped from the window.
+   */
+  _updateWindow(channelId, userMsg, agentReply, agentId = null) {
+    const dropped = this.conversations.addToWindow(channelId, userMsg, agentReply)
+    if (dropped) {
+      const existing = this.conversations.getCachedSummary(channelId) || ''
+      this.haikuResponder.appendToSummary(channelId, dropped, existing, agentId)
+        .then(newSummary => this.conversations.setCachedSummary(channelId, newSummary))
+        .catch(err => console.error('[gateway] Failed to store conversation summary:', err.message))
     }
   }
 
@@ -321,9 +436,7 @@ class GatewayListener {
       }
       this.pendingApprovals.splice(targetIndex, 1)
       this.notifiedIds.delete(approval.id)
-      await this.approvalPaperclip.wakeupAgent(this.dmAgentId).catch(err => {
-        console.error('[gateway] Failed to wake Sophie after approval:', err.message)
-      })
+      this._persistNotifiedIds()
     } catch (err) {
       console.error(`[gateway] Failed to ${action} approval ${approval.id}:`, err.message)
       await msg.reply(`⚠️ Failed to ${action}: ${err.message}`)
@@ -346,9 +459,11 @@ class GatewayListener {
     await this._refreshPendingApprovals()
 
     const currentIds = new Set(this.pendingApprovals.map(a => a.id))
+    let staleRemoved = false
     for (const id of this.notifiedIds) {
-      if (!currentIds.has(id)) this.notifiedIds.delete(id)
+      if (!currentIds.has(id)) { this.notifiedIds.delete(id); staleRemoved = true }
     }
+    if (staleRemoved) this._persistNotifiedIds()
 
     const newApprovals = this.pendingApprovals.slice().reverse().filter(a => !this.notifiedIds.has(a.id))
     if (newApprovals.length === 0) return
@@ -369,9 +484,32 @@ class GatewayListener {
         lines.push('', 'Reply yes or no.')
         await channel.send(lines.join('\n'))
         this.notifiedIds.add(approval.id)
+        this._persistNotifiedIds()
       } catch (err) {
         console.error(`[gateway] Failed to post approval notification for ${approval.id}:`, err.message)
       }
+    }
+  }
+
+  _loadNotifiedIds() {
+    try {
+      const raw = fs.readFileSync(NOTIFIED_IDS_PATH, 'utf8')
+      const ids = JSON.parse(raw)
+      if (Array.isArray(ids)) {
+        console.log(`[gateway] Loaded ${ids.length} persisted notified IDs from ${NOTIFIED_IDS_PATH}`)
+        return new Set(ids)
+      }
+    } catch (_) {}
+    return new Set()
+  }
+
+  _persistNotifiedIds() {
+    try {
+      const dir = path.dirname(NOTIFIED_IDS_PATH)
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(NOTIFIED_IDS_PATH, JSON.stringify([...this.notifiedIds]))
+    } catch (err) {
+      console.error('[gateway] Failed to persist notified IDs:', err.message)
     }
   }
 }

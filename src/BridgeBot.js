@@ -18,13 +18,14 @@ class BridgeBot {
    * @param {import('./PaperclipClient')} opts.paperclip
    * @param {object} opts.conversationConfig - { expiryMinutes, pollIntervalSeconds, pollTimeoutSeconds }
    */
-  constructor({ name, token, channelId, agentId, displayName, paperclip, conversationConfig }) {
+  constructor({ name, token, channelId, agentId, displayName, paperclip, conversationConfig, haikuResponder = null }) {
     this.name = name
     this.token = token
     this.channelId = channelId
     this.agentId = agentId
     this.displayName = displayName
     this.paperclip = paperclip
+    this.haikuResponder = haikuResponder
     this.pollIntervalMs = conversationConfig.pollIntervalSeconds * 1000
     this.pollTimeoutMs = conversationConfig.pollTimeoutSeconds * 1000
 
@@ -70,6 +71,75 @@ class BridgeBot {
     if (!userMessage) return
 
     console.log(`[${this.name}] Received ${isDM ? 'DM' : 'message'} from @${username}: ${userMessage.slice(0, 80)}...`)
+
+    // ── Tier 1 / Tier 2: Haiku fast response ──────────────────────────────
+    if (this.haikuResponder) {
+      msg.channel.sendTyping().catch(() => {})
+
+      // Fetch conversation window + Hindsight summary before calling Haiku
+      const window = this.conversations.getWindow(channelId)
+      let hindsightSummary = this.conversations.getCachedSummary(channelId)
+      if (hindsightSummary === null) {
+        hindsightSummary = await this.haikuResponder.recallConversationSummary(channelId, this.agentId)
+        this.conversations.setCachedSummary(channelId, hindsightSummary)
+      }
+
+      let haikuResult = null
+      try {
+        haikuResult = await this.haikuResponder.respond({
+          agentId: this.agentId,
+          agentName: this.displayName,
+          userMessage,
+          channelId,
+          window,
+          hindsightSummary,
+        })
+      } catch (err) {
+        console.error(`[${this.name}] Haiku error, falling back to full agent:`, err.message)
+      }
+
+      if (haikuResult && !haikuResult.needsWork) {
+        const chunks = this._formatResponse(haikuResult.reply)
+        for (let i = 0; i < chunks.length; i++) {
+          if (i === 0) await msg.reply(chunks[i])
+          else await msg.channel.send(chunks[i])
+        }
+        this._updateWindow(channelId, userMessage, haikuResult.reply)
+        return
+      }
+
+      if (haikuResult && haikuResult.needsWork) {
+        const workDesc = haikuResult.workDescription || `Discord message from @${username}`
+        try {
+          const task = await this.paperclip.createWorkTask({
+            agentId: this.agentId,
+            title: `Discord: ${userMessage.slice(0, 80)}`,
+            description: [
+              `**Discord DM from @${username}:**`,
+              '',
+              userMessage,
+              '',
+              '---',
+              '',
+              `*Work initiated via Haiku tier. Request: ${workDesc}*`,
+            ].join('\n'),
+          })
+          await this.paperclip.wakeupAgent(this.agentId).catch(err => {
+            console.error(`[${this.name}] Failed to wake agent after Tier 2:`, err.message)
+          })
+          const confirmText = haikuResult.reply
+            ? `${haikuResult.reply}\n\nOn it — I've kicked off: ${workDesc}. I'll update you when done. (${task.identifier})`
+            : `On it — I've kicked off: ${workDesc}. I'll update you when done. (${task.identifier})`
+          await msg.reply(confirmText.slice(0, 1900))
+          this._updateWindow(channelId, userMessage, confirmText)
+        } catch (err) {
+          console.error(`[${this.name}] Failed to create work task:`, err.message)
+          await msg.reply(`⚠️ Could not queue work: ${err.message}`)
+        }
+        return
+      }
+      // Haiku threw — fall through to full-agent flow below
+    }
 
     let conv = this.conversations.get(channelId, userId)
 
@@ -203,6 +273,20 @@ class BridgeBot {
       } catch (e) {
         console.error(`[${this.name}] Could not send fallback message:`, e.message)
       }
+    }
+  }
+
+  /**
+   * Add a Haiku exchange to the sliding window and fire-and-forget Hindsight summarisation
+   * when a pair is dropped from the window.
+   */
+  _updateWindow(channelId, userMsg, agentReply) {
+    const dropped = this.conversations.addToWindow(channelId, userMsg, agentReply)
+    if (dropped) {
+      const existing = this.conversations.getCachedSummary(channelId) || ''
+      this.haikuResponder.appendToSummary(channelId, dropped, existing, this.agentId)
+        .then(newSummary => this.conversations.setCachedSummary(channelId, newSummary))
+        .catch(err => console.error(`[${this.name}] Failed to store conversation summary:`, err.message))
     }
   }
 
